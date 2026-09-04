@@ -35,9 +35,83 @@ body {
     var(--bg);
 }
 
-.landing-orb {
-  background: radial-gradient(circle, rgba(212, 180, 131, 0.1), transparent 68%);
-  filter: blur(8px);
+.hero-rings {
+  width: 7.25rem;
+  height: 7.25rem;
+  perspective: 640px;
+}
+
+.hero-rings-tumble {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  animation: hero-rings-tumble 18s linear infinite;
+  will-change: transform;
+}
+
+.hero-ring-tilt {
+  position: absolute;
+  display: block;
+  transform-style: preserve-3d;
+}
+
+.hero-ring-a {
+  inset: 0;
+  transform: rotateX(90deg);
+}
+
+.hero-ring-b {
+  inset: 10%;
+  transform: rotateY(90deg);
+}
+
+.hero-ring-c {
+  inset: 20%;
+  transform: rotateX(90deg) rotateY(90deg);
+}
+
+.hero-ring {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1.5px solid var(--copper);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(212, 180, 131, 0.18),
+    inset 0 0 0 1px rgba(243, 238, 228, 0.08);
+  animation: hero-ring-spin 10s linear infinite;
+  will-change: transform;
+  backface-visibility: visible;
+}
+
+.hero-ring-b .hero-ring {
+  border-color: rgba(243, 238, 228, 0.5);
+  animation-duration: 14s;
+  animation-direction: reverse;
+}
+
+.hero-ring-c .hero-ring {
+  animation-duration: 20s;
+}
+
+@keyframes hero-rings-tumble {
+  from {
+    transform: rotateX(22deg) rotateY(0deg);
+  }
+  to {
+    transform: rotateX(22deg) rotateY(360deg);
+  }
+}
+
+@keyframes hero-ring-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .landing-grain {
@@ -134,6 +208,69 @@ body {
   align-items: stretch;
   justify-content: center;
   padding: 1rem 1.25rem;
+}
+
+.run-stage {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(0, 1.15fr) minmax(22rem, 0.95fr);
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+}
+
+.run-graph-frame,
+.live-graph-canvas,
+.live-graph-empty,
+.run-stage .chat-frame {
+  min-height: 0;
+}
+
+.run-graph-frame {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: rgba(11, 12, 15, 0.72);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(16px);
+}
+
+.live-graph-canvas,
+.live-graph-empty {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+}
+
+.graph-node {
+  opacity: 0;
+  animation: graph-node-in 280ms ease forwards;
+}
+
+.graph-edge {
+  opacity: 0;
+  animation: graph-edge-in 360ms ease forwards;
+}
+
+@keyframes graph-node-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes graph-edge-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .work-frame {
@@ -249,6 +386,13 @@ body {
   margin-top: 1.25rem;
   padding-top: 1.15rem;
   border-top: 1px solid var(--line);
+}
+
+@media (max-width: 1100px) {
+  .run-stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 38vh) minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 860px) {
@@ -504,8 +648,17 @@ body {
   .pn-ring-a,
   .pn-ring-b,
   .pn-draw,
-  .pn-node {
+  .pn-node,
+  .graph-node,
+  .graph-edge,
+  .hero-ring,
+  .hero-rings-tumble {
     animation: none;
+  }
+
+  .graph-node,
+  .graph-edge {
+    opacity: 1;
   }
 
   .pn-draw {

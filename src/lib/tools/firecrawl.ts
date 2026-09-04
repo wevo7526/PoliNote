@@ -4,6 +4,8 @@ export type WebHit = {
   snippet: string;
 };
 
+const SEARCH_TIMEOUT_MS = 5000;
+
 /**
  * Optional evidence context. Failures are swallowed — the crew still runs.
  * Never log the API key.
@@ -11,6 +13,9 @@ export type WebHit = {
 export async function searchPolicyWeb(query: string): Promise<WebHit[]> {
   const key = process.env.FIRECRAWL_API_KEY;
   if (!key) return [];
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
 
   try {
     const response = await fetch("https://api.firecrawl.dev/v1/search", {
@@ -23,10 +28,16 @@ export async function searchPolicyWeb(query: string): Promise<WebHit[]> {
         query,
         limit: 3,
       }),
+      signal: controller.signal,
     });
     if (!response.ok) return [];
     const data = (await response.json()) as {
-      data?: Array<{ title?: string; url?: string; description?: string; markdown?: string }>;
+      data?: Array<{
+        title?: string;
+        url?: string;
+        description?: string;
+        markdown?: string;
+      }>;
     };
     return (data.data ?? [])
       .filter((row) => typeof row.url === "string" && row.url.length > 0)
@@ -36,7 +47,13 @@ export async function searchPolicyWeb(query: string): Promise<WebHit[]> {
         url: row.url as string,
         snippet: (row.description || row.markdown || "").slice(0, 400),
       }));
-  } catch {
+  } catch (error) {
+    console.error(
+      "[polinote/firecrawl]",
+      error instanceof Error ? error.message : "search failed",
+    );
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }

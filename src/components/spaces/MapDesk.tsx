@@ -4,7 +4,7 @@ import { useState } from "react";
 import { NeedRun } from "@/components/app/NeedRun";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
 import { AnalysisModal } from "@/components/studio/AnalysisModal";
-import { GraphVeil } from "@/components/studio/GraphVeil";
+import { LiveGraph } from "@/components/studio/LiveGraph";
 
 export function MapDesk() {
   const { snapshot, activeId } = useWorkspace();
@@ -34,44 +34,17 @@ export function MapDesk() {
             </h1>
           </div>
           <p className="text-[11px] uppercase tracking-[0.12em] text-[var(--muted)]">
-            {snapshot?.nodes.length ?? 0} nodes
+            {snapshot?.nodes.length ?? 0} nodes · {snapshot?.edges.length ?? 0} edges
           </p>
         </header>
 
         <div className="relative min-h-0 flex-1">
-          <GraphVeil
+          <LiveGraph
             nodes={snapshot?.nodes ?? []}
             edges={snapshot?.edges ?? []}
             selectedId={modalNodeId}
+            onOpenNode={setModalNodeId}
           />
-          {(snapshot?.nodes.length ?? 0) === 0 ? (
-            <div className="relative z-10 flex h-full items-center px-8">
-              <p className="max-w-md text-sm text-[var(--muted)]">
-                No graph yet. Ask a question in Run and the crew will lay nodes
-                here.
-              </p>
-            </div>
-          ) : (
-            <ul className="relative z-10 grid max-h-full gap-2 overflow-y-auto p-4 sm:grid-cols-2">
-              {snapshot?.nodes.map((node) => (
-                <li key={node.id}>
-                  <button
-                    type="button"
-                    className="node-card w-full text-left"
-                    onClick={() => setModalNodeId(node.id)}
-                  >
-                    <span className={`kind-tag kind-${node.kind}`}>{node.kind}</span>
-                    <h2 className="mt-2 font-[family-name:var(--font-display)] text-[1.05rem] leading-snug">
-                      {node.title}
-                    </h2>
-                    <p className="mt-2 text-[11px] uppercase tracking-[0.12em] text-[var(--copper)]">
-                      Open analysis
-                    </p>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       </section>
 

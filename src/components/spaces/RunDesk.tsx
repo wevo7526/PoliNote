@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnalysisModal } from "@/components/studio/AnalysisModal";
 import { Composer } from "@/components/studio/Composer";
-import { GraphVeil } from "@/components/studio/GraphVeil";
+import { LiveGraph } from "@/components/studio/LiveGraph";
 import { Thread } from "@/components/studio/Thread";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
 
@@ -13,11 +13,19 @@ export function RunDesk() {
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
+  const threadTick = snapshot?.items
+    .map((item) =>
+      item.kind === "narration" || item.kind === "status"
+        ? `${item.id}:${item.text.length}`
+        : item.id,
+    )
+    .join("|");
+
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [snapshot?.items.length]);
+  }, [threadTick]);
 
   const modalNode =
     snapshot?.nodes.find((node) => node.id === modalNodeId) ??
@@ -27,16 +35,39 @@ export function RunDesk() {
     )?.node ??
     null;
   const modalAnalysis = modalNodeId ? snapshot?.analyses[modalNodeId] ?? null : null;
+  const workingItem = snapshot?.items.find((item) => item.id === "crew-working");
+  const working = workingItem?.kind === "status" ? workingItem.text : null;
 
   return (
-    <main className="relative flex min-h-0 flex-1 items-center justify-center p-4 md:p-6">
-      <GraphVeil
-        nodes={snapshot?.nodes ?? []}
-        edges={snapshot?.edges ?? []}
-        selectedId={modalNodeId}
-      />
+    <main className="run-stage">
+      <section className="run-graph-frame">
+        <header className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
+              Graph
+            </p>
+            <p className="mt-1 text-[11px] uppercase tracking-[0.12em] text-[var(--muted)]">
+              {snapshot
+                ? `${snapshot.nodes.length} nodes · ${snapshot.edges.length} edges`
+                : "No run"}
+            </p>
+          </div>
+          {working ? (
+            <p className="max-w-[18rem] text-right text-[11px] uppercase tracking-[0.12em] text-[var(--copper)]">
+              {working}
+            </p>
+          ) : null}
+        </header>
+        <LiveGraph
+          nodes={snapshot?.nodes ?? []}
+          edges={snapshot?.edges ?? []}
+          selectedId={modalNodeId}
+          busy={busy}
+          onOpenNode={setModalNodeId}
+        />
+      </section>
 
-      <section className="chat-frame relative z-10 flex h-full max-h-[860px] w-full max-w-[44rem] flex-col">
+      <section className="chat-frame relative z-10 flex min-h-0 flex-col">
         <header className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
@@ -46,11 +77,6 @@ export function RunDesk() {
               {snapshot?.run.title ?? "No run selected"}
             </h1>
           </div>
-          <p className="text-[11px] uppercase tracking-[0.12em] text-[var(--muted)]">
-            {snapshot
-              ? `${snapshot.nodes.length} nodes · ${snapshot.edges.length} edges`
-              : "sidebar → new run"}
-          </p>
         </header>
 
         {activeId ? (
@@ -60,8 +86,8 @@ export function RunDesk() {
                 Ask into this run
               </h2>
               <p className="mt-3 max-w-md text-sm leading-relaxed text-[var(--muted)]">
-                Chat builds the digression. Other spaces — Scope, Map, Sources,
-                Draft — stay on this same run.
+                Agents stream here. Nodes appear on the map as the crew places
+                them.
               </p>
             </div>
           ) : (

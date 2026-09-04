@@ -6,10 +6,18 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+  applyCrewEvent,
+  publicCrewError,
+  type CrewStreamEvent,
+} from "@/lib/ai/crew-events";
 import type { RunSnapshot, RunSummary } from "@/lib/platform-types";
 import type { ScopeContract } from "@/schemas/scope-contract";
 
@@ -32,6 +40,49 @@ async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+function applyAndSyncRuns(
+  next: RunSnapshot,
+  setSnapshot: (value: RunSnapshot) => void,
+  setActiveId: (value: string) => void,
+  setRuns: Dispatch<SetStateAction<RunSummary[]>>,
+) {
+  setSnapshot(next);
+  setActiveId(next.run.id);
+  setRuns((prev) => {
+    const rest = prev.filter((run) => run.id !== next.run.id);
+    return [next.run, ...rest];
+  });
+}
+
+async function consumeCrewStream(
+  response: Response,
+  onEvent: (event: CrewStreamEvent) => void,
+): Promise<void> {
+  if (!response.body) {
+    throw new Error("Crew stream was empty");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() ?? "";
+    for (const chunk of chunks) {
+      const line = chunk
+        .split("\n")
+        .find((entry) => entry.startsWith("data:"));
+      if (!line) continue;
+      const payload = line.replace(/^data:\s?/, "").trim();
+      if (!payload) continue;
+      onEvent(JSON.parse(payload) as CrewStreamEvent);
+    }
+  }
+}
+
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -44,14 +95,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [creating, setCreating] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [busy, setBusy] = useState(false);
+  const snapshotRef = useRef<RunSnapshot | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
 
   const applySnapshot = useCallback((next: RunSnapshot) => {
-    setSnapshot(next);
-    setActiveId(next.run.id);
-    setRuns((prev) => {
-      const rest = prev.filter((run) => run.id !== next.run.id);
-      return [next.run, ...rest];
-    });
+    snapshotRef.current = next;
+    applyAndSyncRuns(next, setSnapshot, setActiveId, setRuns);
   }, []);
 
   const setRunInUrl = useCallback(
@@ -134,17 +187,67 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || !activeId || busy) return;
+      const current = snapshotRef.current;
+      if (!trimmed || !activeId || busy || !current) return;
+
+      abortRef.current?.abort();
+      const abort = new AbortController();
+      abortRef.current = abort;
       setBusy(true);
+
+      const optimistic = applyCrewEvent(current, {
+        type: "user",
+        item: { id: `local-${Date.now()}`, kind: "user", text: trimmed },
+      });
+      applySnapshot({
+        ...optimistic,
+        run: { ...optimistic.run, status: "running" },
+      });
+
       try {
         const response = await fetch(`/api/runs/${activeId}/messages`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: trimmed }),
+          signal: abort.signal,
         });
-        const data = await readJson<RunSnapshot>(response);
-        if (data.run) applySnapshot(data);
+
+        const contentType = response.headers.get("content-type") ?? "";
+        if (!contentType.includes("text/event-stream")) {
+          if (response.ok) {
+            const data = await readJson<RunSnapshot>(response);
+            if (data.run) applySnapshot(data);
+            return;
+          }
+          const failed = await response.json().catch(() => null);
+          const message =
+            failed && typeof failed === "object" && "error" in failed
+              ? String(failed.error)
+              : `Crew request failed (${response.status})`;
+          applySnapshot(
+            applyCrewEvent(snapshotRef.current ?? optimistic, {
+              type: "error",
+              message,
+            }),
+          );
+          return;
+        }
+
+        let draft = snapshotRef.current ?? optimistic;
+        await consumeCrewStream(response, (event) => {
+          draft = applyCrewEvent(draft, event);
+          applySnapshot(draft);
+        });
+      } catch (error) {
+        if (abort.signal.aborted) return;
+        applySnapshot(
+          applyCrewEvent(snapshotRef.current ?? optimistic, {
+            type: "error",
+            message: publicCrewError(error),
+          }),
+        );
       } finally {
+        if (abortRef.current === abort) abortRef.current = null;
         setBusy(false);
       }
     },
