@@ -151,7 +151,7 @@ export function applyCrewEvent(
             node.id === event.node.id ? event.node : node,
           )
         : [...snapshot.nodes, event.node];
-      return { ...snapshot, nodes: layoutNodes(nodes) };
+      return { ...snapshot, nodes: layoutNodes(nodes, snapshot.edges) };
     }
     case "edge": {
       const edges = snapshot.edges.some((edge) => edge.id === event.edge.id)
@@ -159,7 +159,7 @@ export function applyCrewEvent(
             edge.id === event.edge.id ? event.edge : edge,
           )
         : [...snapshot.edges, event.edge];
-      return { ...snapshot, edges };
+      return { ...snapshot, edges, nodes: layoutNodes(snapshot.nodes, edges) };
     }
     case "analysis":
       return {

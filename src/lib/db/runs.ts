@@ -2,7 +2,7 @@ import { appendRunEvent, ensureEventsTable, listEvents } from "@/lib/db/events";
 import { asJson, mutateUserDb, queryRows, withUserDb } from "@/lib/db/user-store";
 import type { RunDraft, RunSnapshot, RunSummary } from "@/lib/platform-types";
 import type { NodeAnalysis } from "@/schemas/analysis";
-import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
+import type { DigressionEdge, DigressionNode, UserNodeStatus } from "@/schemas/digression";
 import type { ScopeContract } from "@/schemas/scope-contract";
 import type { ThreadItem } from "@/components/studio/thread-types";
 
@@ -295,6 +295,36 @@ export async function persistScope(
   await appendRunEvent(userId, runId, {
     type: "scope.updated",
     payload: { contract: { ...scope, updatedAt: ts } },
+  });
+  return getRun(userId, runId);
+}
+
+export async function updateNodeStatus(
+  userId: string,
+  runId: string,
+  nodeId: string,
+  status: UserNodeStatus,
+): Promise<RunSnapshot | null> {
+  const current = await getRun(userId, runId);
+  if (!current) return null;
+  const node = current.nodes.find((item) => item.id === nodeId);
+  if (!node) return null;
+
+  const ts = nowIso();
+  const next: DigressionNode = { ...node, status, updatedAt: ts };
+  await mutateUserDb(userId, async (connection) => {
+    await connection.run(
+      `INSERT OR REPLACE INTO nodes (id, run_id, data) VALUES ($id, $run_id, $data)`,
+      { id: next.id, run_id: runId, data: JSON.stringify(next) },
+    );
+    await connection.run(
+      `UPDATE runs SET updated_at = $updated_at WHERE id = $id`,
+      { updated_at: ts, id: runId },
+    );
+  });
+  await appendRunEvent(userId, runId, {
+    type: "node.status_changed",
+    payload: { nodeId, status, node: next },
   });
   return getRun(userId, runId);
 }

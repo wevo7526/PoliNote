@@ -845,14 +845,18 @@ Each field is one dense paragraph (4–8 sentences). runTitle max 80 chars.`,
 Add 2–4 nodes that extend the existing graph, or revise existing keys.
 Reuse keys when updating. Do not duplicate titles.
 Each node: key, kind, title, body (2 sentences), status (proposed|contested), confidence, agent.
-No analysis fields. Edges: sourceKey, targetKey, kind (supports|attacks|depends_on|elaborates|alternatives|causal).`
+No analysis fields. Edges: sourceKey, targetKey, kind (supports|attacks|depends_on|elaborates|alternatives|causal).
+Keep the instrument → mechanism → claim → identification → incidence spine intact.
+Put forks, counterfactuals, and uncertainties on that spine with an edge; they are digressions, not a second argument.`
           : `Return compact JSON: { "nodes": [...], "edges": [...] }.
 Exactly 6 nodes and 5–7 edges that form ONE connected argument under this scope.
-Required kinds: claim, mechanism, incidence, uncertainty, counterfactual, and constraint or fork.
+Spine first (required kinds): constraint (instrument), mechanism, claim, incidence.
+Then digressions: uncertainty and either counterfactual or fork.
 Each node: key, kind, title, body (2 sentences), status (proposed|contested), confidence, agent.
-No analysis fields. Keys like claim_core, mech_channel, inc_region, unc_id, cf_baseline, con_legal.
+No analysis fields. Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.
 Edges: sourceKey, targetKey, kind (supports|attacks|depends_on|elaborates|alternatives|causal).
-The graph must be cohesive: every node attaches to the instrument → target → identification spine.`,
+Connect the spine left to right: instrument → mechanism → claim → incidence.
+Attach every digression to a spine node. Do not start a second disconnected argument.`,
         JSON.stringify({
           question: input.question,
           latestUserMessage: input.latestMessage,

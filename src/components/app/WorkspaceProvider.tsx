@@ -20,6 +20,7 @@ import {
 } from "@/lib/ai/crew-events";
 import type { RunSnapshot, RunSummary } from "@/lib/platform-types";
 import type { ScopeContract } from "@/schemas/scope-contract";
+import type { UserNodeStatus } from "@/schemas/digression";
 
 type WorkspaceContextValue = {
   runs: RunSummary[];
@@ -33,6 +34,7 @@ type WorkspaceContextValue = {
   newRun: () => Promise<void>;
   send: (text: string) => Promise<void>;
   saveScope: (scope: ScopeContract) => Promise<boolean>;
+  setNodeStatus: (nodeId: string, status: UserNodeStatus) => Promise<boolean>;
   deleteRun: (id: string) => Promise<void>;
 };
 
@@ -275,6 +277,21 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [activeId, applySnapshot, busy],
   );
 
+  const setNodeStatus = useCallback(
+    async (nodeId: string, status: UserNodeStatus) => {
+      if (!activeId) return false;
+      const response = await fetch(`/api/runs/${activeId}/nodes/${nodeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!response.ok) return false;
+      applySnapshot(await readJson<RunSnapshot>(response));
+      return true;
+    },
+    [activeId, applySnapshot],
+  );
+
   const saveScope = useCallback(
     async (scope: ScopeContract) => {
       if (!activeId) return false;
@@ -328,6 +345,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       newRun,
       send,
       saveScope,
+      setNodeStatus,
       deleteRun,
     }),
     [
@@ -342,6 +360,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       newRun,
       send,
       saveScope,
+      setNodeStatus,
       deleteRun,
     ],
   );

@@ -27,6 +27,13 @@ export const DigressionNodeStatusSchema = z.enum([
 
 export type DigressionNodeStatus = z.infer<typeof DigressionNodeStatusSchema>;
 
+export const USER_NODE_STATUSES = ["proposed", "contested", "pruned"] as const;
+export type UserNodeStatus = (typeof USER_NODE_STATUSES)[number];
+
+export function isUserNodeStatus(value: string): value is UserNodeStatus {
+  return (USER_NODE_STATUSES as readonly string[]).includes(value);
+}
+
 export const ConfidenceBandSchema = z.enum([
   "low",
   "medium",

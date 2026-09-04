@@ -46,7 +46,7 @@ export function applyRunEvent(
         nodes = nodes.some((item) => item.id === node.id)
           ? nodes.map((item) => (item.id === node.id ? node : item))
           : [...nodes, node];
-        nodes = layoutNodes(nodes);
+        nodes = layoutNodes(nodes, next.edges);
       } else if (
         event.type === "node.status_changed" &&
         typeof payload.nodeId === "string" &&
@@ -69,7 +69,7 @@ export function applyRunEvent(
       const edges = next.edges.some((item) => item.id === edge.id)
         ? next.edges.map((item) => (item.id === edge.id ? edge : item))
         : [...next.edges, edge];
-      return { ...next, edges };
+      return { ...next, edges, nodes: layoutNodes(next.nodes, edges) };
     }
     case "export.generated": {
       const payload = asRecord(event.payload);

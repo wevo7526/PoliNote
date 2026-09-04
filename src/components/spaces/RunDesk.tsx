@@ -8,9 +8,10 @@ import { Thread } from "@/components/studio/Thread";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
 
 export function RunDesk() {
-  const { snapshot, activeId, busy, loadingRun, send } = useWorkspace();
+  const { snapshot, activeId, busy, loadingRun, send, setNodeStatus } = useWorkspace();
   const [draft, setDraft] = useState("");
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
+  const [statusBusy, setStatusBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   const threadTick = [
@@ -131,6 +132,11 @@ export function RunDesk() {
           node={modalNode}
           analysis={modalAnalysis}
           onClose={() => setModalNodeId(null)}
+          onSetStatus={(nodeId, status) => {
+            setStatusBusy(true);
+            void setNodeStatus(nodeId, status).finally(() => setStatusBusy(false));
+          }}
+          statusBusy={statusBusy}
         />
       ) : null}
     </main>

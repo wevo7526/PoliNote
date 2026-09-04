@@ -2,16 +2,25 @@
 
 import { useEffect, useId, useRef } from "react";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
+import { NodeActions } from "@/components/studio/NodeActions";
 import type { NodeAnalysis } from "@/schemas/analysis";
-import type { DigressionNode } from "@/schemas/digression";
+import type { DigressionNode, UserNodeStatus } from "@/schemas/digression";
 
 type AnalysisModalProps = {
   node: DigressionNode;
   analysis: NodeAnalysis | null;
   onClose: () => void;
+  onSetStatus?: (nodeId: string, status: UserNodeStatus) => void;
+  statusBusy?: boolean;
 };
 
-export function AnalysisModal({ node, analysis, onClose }: AnalysisModalProps) {
+export function AnalysisModal({
+  node,
+  analysis,
+  onClose,
+  onSetStatus,
+  statusBusy = false,
+}: AnalysisModalProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -52,6 +61,15 @@ export function AnalysisModal({ node, analysis, onClose }: AnalysisModalProps) {
               {node.status} · {node.confidence}
               {node.agent ? ` · ${node.agent}` : ""}
             </p>
+            {onSetStatus ? (
+              <div className="mt-3">
+                <NodeActions
+                  node={node}
+                  disabled={statusBusy}
+                  onSetStatus={onSetStatus}
+                />
+              </div>
+            ) : null}
           </div>
           <button type="button" className="modal-close" onClick={onClose}>
             Close

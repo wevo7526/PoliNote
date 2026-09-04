@@ -1,5 +1,6 @@
 "use client";
 
+import { NODE_H, NODE_W, layoutPolicyGraph } from "@/lib/ai/layout";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
 
 type GraphVeilProps = {
@@ -28,15 +29,16 @@ export function GraphVeil({ nodes, edges, selectedId }: GraphVeilProps) {
     );
   }
 
-  const xs = nodes.map((n) => n.position.x);
-  const ys = nodes.map((n) => n.position.y);
+  const layout = layoutPolicyGraph(nodes, edges);
+  const xs = layout.nodes.map((node) => node.position.x);
+  const ys = layout.nodes.map((node) => node.position.y);
   const minX = Math.min(...xs) - 40;
   const minY = Math.min(...ys) - 40;
-  const maxX = Math.max(...xs) + 320;
-  const maxY = Math.max(...ys) + 120;
+  const maxX = Math.max(...xs) + NODE_W + 40;
+  const maxY = Math.max(layout.bandBottom, ...ys) + 40;
   const width = Math.max(800, maxX - minX);
   const height = Math.max(520, maxY - minY);
-  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const byId = new Map(layout.nodes.map((node) => [node.id, node]));
 
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
@@ -49,10 +51,10 @@ export function GraphVeil({ nodes, edges, selectedId }: GraphVeilProps) {
           const from = byId.get(edge.sourceId);
           const to = byId.get(edge.targetId);
           if (!from || !to) return null;
-          const x1 = from.position.x + 140;
-          const y1 = from.position.y + 28;
-          const x2 = to.position.x + 140;
-          const y2 = to.position.y + 28;
+          const x1 = from.position.x + NODE_W / 2;
+          const y1 = from.position.y + NODE_H / 2;
+          const x2 = to.position.x + NODE_W / 2;
+          const y2 = to.position.y + NODE_H / 2;
           const mx = (x1 + x2) / 2;
           const attack = edge.kind === "attacks";
           return (
@@ -66,24 +68,24 @@ export function GraphVeil({ nodes, edges, selectedId }: GraphVeilProps) {
             />
           );
         })}
-        {nodes.map((node) => {
+        {layout.nodes.map((node) => {
           const selected = node.id === selectedId;
           return (
             <g key={node.id}>
               <rect
                 x={node.position.x}
                 y={node.position.y}
-                width={280}
-                height={56}
+                width={NODE_W}
+                height={NODE_H}
                 rx={2}
                 fill="rgba(11,12,15,0.35)"
                 stroke={KIND_FILL[node.kind]}
                 strokeWidth={selected ? 1.8 : 0.9}
-                opacity={selected ? 0.95 : 0.55}
+                opacity={node.status === "pruned" ? 0.28 : selected ? 0.95 : 0.55}
               />
               <circle
                 cx={node.position.x + 14}
-                cy={node.position.y + 28}
+                cy={node.position.y + NODE_H / 2}
                 r={4}
                 fill={KIND_FILL[node.kind]}
               />

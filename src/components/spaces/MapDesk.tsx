@@ -5,10 +5,14 @@ import { NeedRun } from "@/components/app/NeedRun";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
 import { AnalysisModal } from "@/components/studio/AnalysisModal";
 import { LiveGraph } from "@/components/studio/LiveGraph";
+import { NodeActions } from "@/components/studio/NodeActions";
+import type { UserNodeStatus } from "@/schemas/digression";
 
 export function MapDesk() {
-  const { snapshot, activeId } = useWorkspace();
-  const [modalNodeId, setModalNodeId] = useState<string | null>(null);
+  const { snapshot, activeId, setNodeStatus } = useWorkspace();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
 
   if (!activeId) {
     return (
@@ -18,12 +22,17 @@ export function MapDesk() {
     );
   }
 
-  const modalNode = snapshot?.nodes.find((node) => node.id === modalNodeId) ?? null;
-  const modalAnalysis = modalNodeId ? snapshot?.analyses[modalNodeId] ?? null : null;
+  const selected = snapshot?.nodes.find((node) => node.id === selectedId) ?? null;
+  const modalAnalysis = selectedId ? snapshot?.analyses[selectedId] ?? null : null;
+
+  const onSetStatus = (nodeId: string, status: UserNodeStatus) => {
+    setStatusBusy(true);
+    void setNodeStatus(nodeId, status).finally(() => setStatusBusy(false));
+  };
 
   return (
     <main className="space-page">
-      <section className="work-frame relative overflow-hidden">
+      <section className="work-frame map-frame relative overflow-hidden">
         <header className="relative z-10 flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
@@ -42,17 +51,47 @@ export function MapDesk() {
           <LiveGraph
             nodes={snapshot?.nodes ?? []}
             edges={snapshot?.edges ?? []}
-            selectedId={modalNodeId}
-            onOpenNode={setModalNodeId}
+            selectedId={selectedId}
+            onOpenNode={(id) => {
+              setSelectedId(id);
+              setModalOpen(false);
+            }}
           />
         </div>
+
+        {selected ? (
+          <div className="map-selection">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.14em] text-[var(--copper)]">
+                {selected.kind} · {selected.status}
+              </p>
+              <p className="mt-1 text-sm">{selected.title}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <NodeActions
+                node={selected}
+                disabled={statusBusy}
+                onSetStatus={onSetStatus}
+              />
+              <button
+                type="button"
+                className="node-action"
+                onClick={() => setModalOpen(true)}
+              >
+                Open analysis
+              </button>
+            </div>
+          </div>
+        ) : null}
       </section>
 
-      {modalNode ? (
+      {modalOpen && selected ? (
         <AnalysisModal
-          node={modalNode}
+          node={selected}
           analysis={modalAnalysis}
-          onClose={() => setModalNodeId(null)}
+          onClose={() => setModalOpen(false)}
+          onSetStatus={onSetStatus}
+          statusBusy={statusBusy}
         />
       ) : null}
     </main>

@@ -1,6 +1,15 @@
 "use client";
 
-import { layoutNodes } from "@/lib/ai/layout";
+import { useEffect, useRef, useState } from "react";
+import {
+  HEADER_Y,
+  LANE_LABEL,
+  LANE_X,
+  NODE_H,
+  NODE_W,
+  SPINE_LANES,
+  layoutPolicyGraph,
+} from "@/lib/ai/layout";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
 
 type LiveGraphProps = {
@@ -22,6 +31,26 @@ const KIND_FILL: Record<DigressionNode["kind"], string> = {
   fork: "#d48ca0",
 };
 
+function edgeStroke(kind: DigressionEdge["kind"]): { color: string; dash?: string } {
+  if (kind === "attacks") return { color: "#d46a6a" };
+  if (kind === "alternatives") return { color: "rgba(243,238,228,0.45)", dash: "5 6" };
+  if (kind === "depends_on") return { color: "rgba(243,238,228,0.22)" };
+  if (kind === "supports" || kind === "causal") return { color: "rgba(212,180,131,0.7)" };
+  return { color: "rgba(243,238,228,0.38)" };
+}
+
+function statusStroke(node: DigressionNode, fill: string, selected: boolean): {
+  color: string;
+  width: number;
+  dash?: string;
+} {
+  if (node.status === "contested") return { color: "#d4a08c", width: selected ? 2 : 1.6 };
+  if (node.status === "pruned") return { color: "rgba(154,146,132,0.45)", width: 1, dash: "4 4" };
+  if (node.status === "supported") return { color: "#8fbf9a", width: selected ? 2 : 1.5 };
+  if (selected) return { color: fill, width: 1.8 };
+  return { color: fill, width: 1.1 };
+}
+
 export function LiveGraph({
   nodes,
   edges,
@@ -29,9 +58,30 @@ export function LiveGraph({
   busy = false,
   onOpenNode,
 }: LiveGraphProps) {
-  const laidOut = layoutNodes(nodes);
+  const layout = layoutPolicyGraph(nodes, edges);
+  const seenRef = useRef<Set<string>>(new Set());
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const runId = nodes[0]?.runId ?? "";
 
-  if (laidOut.length === 0) {
+  useEffect(() => {
+    seenRef.current = new Set();
+    setFresh(new Set());
+  }, [runId]);
+
+  const nodeKey = nodes.map((node) => node.id).join("|");
+  useEffect(() => {
+    const arrived = new Set<string>();
+    for (const node of nodes) {
+      if (!seenRef.current.has(node.id)) arrived.add(node.id);
+    }
+    for (const node of nodes) seenRef.current.add(node.id);
+    if (arrived.size === 0) return;
+    setFresh(arrived);
+    const timer = window.setTimeout(() => setFresh(new Set()), 1400);
+    return () => window.clearTimeout(timer);
+  }, [nodeKey, nodes]);
+
+  if (layout.nodes.length === 0) {
     return (
       <div className="live-graph-empty">
         <div className="veil-idle absolute left-1/2 top-1/2 h-[280px] w-[280px] -translate-x-1/2 -translate-y-1/2" />
@@ -42,15 +92,13 @@ export function LiveGraph({
     );
   }
 
-  const xs = laidOut.map((node) => node.position.x);
-  const ys = laidOut.map((node) => node.position.y);
-  const minX = Math.min(...xs) - 36;
-  const minY = Math.min(...ys) - 36;
-  const maxX = Math.max(...xs) + 300;
-  const maxY = Math.max(...ys) + 92;
-  const width = Math.max(720, maxX - minX);
-  const height = Math.max(360, maxY - minY);
-  const byId = new Map(laidOut.map((node) => [node.id, node]));
+  const minX = 8;
+  const minY = 0;
+  const maxX = LANE_X.incidence + NODE_W + 40;
+  const maxY = Math.max(layout.bandBottom + 24, 360);
+  const width = maxX - minX;
+  const height = maxY - minY;
+  const byId = new Map(layout.nodes.map((node) => [node.id, node]));
 
   return (
     <div className="live-graph-canvas">
@@ -59,38 +107,88 @@ export function LiveGraph({
         className="h-full w-full"
         preserveAspectRatio="xMidYMid meet"
         role="img"
-        aria-label="Digression graph"
+        aria-label="Policy digression graph"
       >
+        {SPINE_LANES.map((lane) => (
+          <text
+            key={lane}
+            className="graph-lane-label"
+            x={LANE_X[lane]}
+            y={HEADER_Y}
+            fill="#d4b483"
+            fontSize={10}
+            letterSpacing={1.6}
+            style={{ textTransform: "uppercase" }}
+          >
+            {LANE_LABEL[lane]}
+          </text>
+        ))}
+
+        <line
+          x1={LANE_X.instrument}
+          y1={layout.bandTop}
+          x2={LANE_X.incidence + NODE_W}
+          y2={layout.bandTop}
+          stroke="rgba(212,180,131,0.28)"
+          strokeWidth={1}
+        />
+        <text
+          className="graph-lane-label"
+          x={LANE_X.instrument}
+          y={layout.bandTop + 18}
+          fill="#9a9284"
+          fontSize={10}
+          letterSpacing={1.6}
+          style={{ textTransform: "uppercase" }}
+        >
+          {LANE_LABEL.digression}
+        </text>
+        <rect
+          x={LANE_X.instrument - 8}
+          y={layout.bandTop + 22}
+          width={LANE_X.incidence + NODE_W - LANE_X.instrument + 16}
+          height={Math.max(layout.bandBottom - layout.bandTop - 22, 80)}
+          fill="rgba(212,180,131,0.03)"
+          stroke="rgba(212,180,131,0.08)"
+        />
+
         {edges.map((edge) => {
           const from = byId.get(edge.sourceId);
           const to = byId.get(edge.targetId);
           if (!from || !to) return null;
-          const x1 = from.position.x + 130;
-          const y1 = from.position.y + 30;
-          const x2 = to.position.x + 130;
-          const y2 = to.position.y + 30;
+          const quiet =
+            from.status === "pruned" || to.status === "pruned";
+          const x1 = from.position.x + NODE_W / 2;
+          const y1 = from.position.y + NODE_H / 2;
+          const x2 = to.position.x + NODE_W / 2;
+          const y2 = to.position.y + NODE_H / 2;
           const mx = (x1 + x2) / 2;
-          const attack = edge.kind === "attacks";
+          const stroke = edgeStroke(edge.kind);
           return (
             <path
               key={edge.id}
               className="graph-edge"
               d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
               fill="none"
-              stroke={attack ? "#d46a6a" : "rgba(243,238,228,0.38)"}
+              stroke={stroke.color}
               strokeWidth={1.4}
-              strokeDasharray={edge.kind === "alternatives" ? "5 6" : undefined}
+              strokeDasharray={stroke.dash}
+              opacity={quiet ? 0.22 : 1}
             />
           );
         })}
-        {laidOut.map((node) => {
+
+        {layout.nodes.map((node) => {
           const selected = node.id === selectedId;
           const fill = KIND_FILL[node.kind];
+          const ring = statusStroke(node, fill, selected);
           const clickable = Boolean(onOpenNode);
+          const arriving = fresh.has(node.id);
+          const pruned = node.status === "pruned";
           return (
             <g
               key={node.id}
-              className="graph-node"
+              className={`graph-node${arriving ? " is-arriving" : ""}${pruned ? " is-pruned" : ""}`}
               role={clickable ? "button" : undefined}
               tabIndex={clickable ? 0 : undefined}
               style={{ cursor: clickable ? "pointer" : "default" }}
@@ -106,12 +204,13 @@ export function LiveGraph({
               <rect
                 x={node.position.x}
                 y={node.position.y}
-                width={260}
-                height={60}
+                width={NODE_W}
+                height={NODE_H}
                 rx={2}
                 fill={selected ? "rgba(212,180,131,0.14)" : "rgba(11,12,15,0.82)"}
-                stroke={fill}
-                strokeWidth={selected ? 1.8 : 1.1}
+                stroke={ring.color}
+                strokeWidth={ring.width}
+                strokeDasharray={ring.dash}
               />
               <circle
                 cx={node.position.x + 14}
@@ -128,7 +227,7 @@ export function LiveGraph({
                 style={{ textTransform: "uppercase" }}
               >
                 {node.kind}
-                {node.status === "supported" ? " · supported" : ""}
+                {node.status !== "proposed" ? ` · ${node.status}` : ""}
               </text>
               <text
                 x={node.position.x + 26}

@@ -272,9 +272,22 @@ body {
   animation: graph-node-in 280ms ease forwards;
 }
 
+.graph-node.is-arriving {
+  animation: graph-node-arrive 1.2s ease forwards;
+}
+
+.graph-node.is-pruned {
+  animation: none;
+  opacity: 0.38;
+}
+
 .graph-edge {
   opacity: 0;
   animation: graph-edge-in 360ms ease forwards;
+}
+
+.graph-lane-label {
+  font-family: var(--font-sans), "Segoe UI", sans-serif;
 }
 
 @keyframes graph-node-in {
@@ -282,6 +295,18 @@ body {
     opacity: 0;
   }
   to {
+    opacity: 1;
+  }
+}
+
+@keyframes graph-node-arrive {
+  0% {
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
     opacity: 1;
   }
 }
@@ -304,6 +329,10 @@ body {
   background: rgba(11, 12, 15, 0.72);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(16px);
+}
+
+.work-frame.map-frame {
+  max-width: none;
 }
 
 .field-input {
@@ -698,6 +727,40 @@ body {
   color: var(--muted);
 }
 
+.map-selection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-top: 1px solid var(--line);
+  padding: 0.65rem 1.15rem;
+}
+
+.node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.node-action {
+  border: 1px solid var(--line);
+  padding: 0.35rem 0.65rem;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.node-action:hover:not(:disabled) {
+  border-color: rgba(212, 180, 131, 0.45);
+  color: var(--copper);
+}
+
+.node-action:disabled {
+  opacity: 0.35;
+}
+
 @media (max-width: 1100px) {
   .run-stage {
     grid-template-columns: 1fr;
@@ -960,6 +1023,7 @@ body {
   .pn-draw,
   .pn-node,
   .graph-node,
+  .graph-node.is-arriving,
   .graph-edge,
   .hero-ring,
   .hero-rings-tumble {
@@ -967,6 +1031,7 @@ body {
   }
 
   .graph-node,
+  .graph-node.is-arriving,
   .graph-edge {
     opacity: 1;
   }
