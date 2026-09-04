@@ -10,7 +10,7 @@ import type { RunSnapshot } from "@/lib/platform-types";
 import type { ThreadItem } from "@/components/studio/thread-types";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 180;
 export const dynamic = "force-dynamic";
 
 type RouteCtx = { params: Promise<{ id: string }> };

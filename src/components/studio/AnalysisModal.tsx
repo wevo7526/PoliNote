@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef } from "react";
+import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionNode } from "@/schemas/digression";
 
@@ -58,14 +59,12 @@ export function AnalysisModal({ node, analysis, onClose }: AnalysisModalProps) {
         </div>
 
         <div className="modal-body">
-          <p className="text-[15px] leading-[1.7] whitespace-pre-wrap text-[var(--ink)]/92">
-            {analysis?.body ?? node.body}
-          </p>
+          <AnalysisBody text={analysis?.body ?? node.body} />
 
           {analysis && analysis.citations.length > 0 ? (
             <div className="mt-6">
               <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-                Leads
+                Sources
               </h3>
               <ul className="mt-2 space-y-2 text-sm">
                 {analysis.citations.map((citation) => (

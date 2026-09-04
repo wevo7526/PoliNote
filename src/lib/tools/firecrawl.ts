@@ -1,14 +1,19 @@
+import {
+  filterReputableHits,
+  LITERATURE_QUERY_HINT,
+} from "@/lib/sources/reputable";
+
 export type WebHit = {
   title: string;
   url: string;
   snippet: string;
 };
 
-const SEARCH_TIMEOUT_MS = 5000;
+const SEARCH_TIMEOUT_MS = 6000;
 
 /**
  * Optional evidence context. Failures are swallowed — the crew still runs.
- * Never log the API key.
+ * Social and user-generated hosts are dropped. Never log the API key.
  */
 export async function searchPolicyWeb(query: string): Promise<WebHit[]> {
   const key = process.env.FIRECRAWL_API_KEY;
@@ -25,8 +30,8 @@ export async function searchPolicyWeb(query: string): Promise<WebHit[]> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        query,
-        limit: 3,
+        query: `${query} ${LITERATURE_QUERY_HINT}`,
+        limit: 8,
       }),
       signal: controller.signal,
     });
@@ -39,14 +44,14 @@ export async function searchPolicyWeb(query: string): Promise<WebHit[]> {
         markdown?: string;
       }>;
     };
-    return (data.data ?? [])
+    const hits = (data.data ?? [])
       .filter((row) => typeof row.url === "string" && row.url.length > 0)
-      .slice(0, 3)
       .map((row) => ({
         title: row.title?.trim() || row.url || "Source",
         url: row.url as string,
         snippet: (row.description || row.markdown || "").slice(0, 400),
       }));
+    return filterReputableHits(hits).slice(0, 5);
   } catch (error) {
     console.error(
       "[polinote/firecrawl]",

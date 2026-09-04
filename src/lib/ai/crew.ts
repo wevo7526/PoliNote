@@ -4,6 +4,7 @@ import {
   type CrewStreamEvent,
   workingStatus,
 } from "@/lib/ai/crew-events";
+import { filterReputableHits } from "@/lib/sources/reputable";
 import { searchPolicyWeb, type WebHit } from "@/lib/tools/firecrawl";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import {
@@ -104,9 +105,51 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function modelName(): string {
-  return process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+const DEFAULT_MODEL = "gpt-6-astra";
+const FALLBACK_MODELS = ["gpt-5.6", "gpt-4.1"];
+
+const MODEL_OPTIONS = {
+  openai: { reasoningEffort: "high" as const },
+};
+
+function isModelUnavailable(error: unknown): boolean {
+  const raw = error instanceof Error ? error.message : String(error);
+  return /model|not found|does not exist|invalid_request|unsupported/i.test(raw) &&
+    /model|gpt-|response_format|not found|does not exist|unsupported/i.test(raw);
 }
+
+function modelQueue(): string[] {
+  const preferred = process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  return [preferred, ...FALLBACK_MODELS].filter(
+    (id, index, all) => id.length > 0 && all.indexOf(id) === index,
+  );
+}
+
+type ModelSlot = {
+  id: string;
+  demote: () => boolean;
+};
+
+function createModelSlot(): ModelSlot {
+  const queue = modelQueue();
+  let index = 0;
+  return {
+    get id() {
+      return queue[index] ?? DEFAULT_MODEL;
+    },
+    demote() {
+      if (index >= queue.length - 1) return false;
+      index += 1;
+      console.error("[polinote/crew] model unavailable, switching to", queue[index]);
+      return true;
+    },
+  };
+}
+
+const AUTONOMY = `Infer missing policy details from the question and proceed. Do not ask clarifying questions. Do not stop for approval. Fill working values. Never mark a node supported.
+Cite only real literature and official sources from the provided webLeads: NBER, journals, CRS, CBO, GAO, FRED/BLS/BEA, IMF, OECD, World Bank, Congress/govinfo, and comparable research shops.
+Never cite Facebook, Reddit, Twitter/X, TikTok, Instagram, YouTube, LinkedIn, Quora, Wikipedia, Medium, Substack, or any social / user-generated page.
+Never invent a paper, URL, or working-paper number. If a lead is missing, say the evidence is missing.`;
 
 function slugKey(key: string): string {
   return key
@@ -287,7 +330,7 @@ function hydrateNode(
     body: raw.body,
     confidence: raw.confidence,
     agent: raw.agent,
-    provenance: web.slice(0, 2).map((hit) => ({
+    provenance: filterReputableHits(web).slice(0, 2).map((hit) => ({
       source: "web" as const,
       label: hit.title,
       url: hit.url,
@@ -325,7 +368,7 @@ function hydrateAnalysis(runId: string, raw: RawNode, web: WebHit[]): NodeAnalys
     runId,
     title: raw.analysisTitle || raw.title,
     body: raw.analysis,
-    citations: web.map((hit) => ({
+    citations: filterReputableHits(web).map((hit) => ({
       title: hit.title,
       url: hit.url,
       note: hit.snippet || undefined,
@@ -338,32 +381,40 @@ async function* streamNarration(input: {
   system: string;
   prompt: string;
   fallback: string;
+  model: ModelSlot;
 }): AsyncGenerator<CrewStreamEvent, string> {
   const id = crypto.randomUUID();
-  try {
-    const result = streamText({
-      model: openai(modelName()),
-      system: input.system,
-      prompt: input.prompt,
-    });
-    let full = "";
-    for await (const delta of result.textStream) {
-      if (!delta) continue;
-      full += delta;
-      yield {
-        type: "narration_delta",
-        id,
-        agent: input.agent,
-        delta,
-      };
+  for (;;) {
+    try {
+      const result = streamText({
+        model: openai(input.model.id),
+        providerOptions: MODEL_OPTIONS,
+        system: `${AUTONOMY}\n${input.system}`,
+        prompt: input.prompt,
+      });
+      let full = "";
+      for await (const delta of result.textStream) {
+        if (!delta) continue;
+        full += delta;
+        yield {
+          type: "narration_delta",
+          id,
+          agent: input.agent,
+          delta,
+        };
+      }
+      if (full.trim()) return full;
+      break;
+    } catch (error) {
+      console.error(
+        "[polinote/crew] narration failed",
+        input.agent,
+        input.model.id,
+        error instanceof Error ? error.message : error,
+      );
+      if (isModelUnavailable(error) && input.model.demote()) continue;
+      break;
     }
-    if (full.trim()) return full;
-  } catch (error) {
-    console.error(
-      "[polinote/crew] narration failed",
-      input.agent,
-      error instanceof Error ? error.message : error,
-    );
   }
   yield {
     type: "narration",
@@ -377,13 +428,30 @@ async function* streamNarration(input: {
   return input.fallback;
 }
 
-async function askJson(system: string, prompt: string): Promise<unknown> {
-  const { text } = await generateText({
-    model: openai(modelName()),
-    system: `${system}\nReturn ONLY a JSON object. No markdown.`,
-    prompt,
-  });
-  return extractJson(text);
+async function askJson(
+  model: ModelSlot,
+  system: string,
+  prompt: string,
+): Promise<unknown> {
+  for (;;) {
+    try {
+      const { text } = await generateText({
+        model: openai(model.id),
+        providerOptions: MODEL_OPTIONS,
+        system: `${AUTONOMY}\n${system}\nReturn ONLY a JSON object. No markdown fences around the object. String fields may contain markdown.`,
+        prompt,
+      });
+      return extractJson(text);
+    } catch (error) {
+      console.error(
+        "[polinote/crew] json call failed",
+        model.id,
+        error instanceof Error ? error.message : error,
+      );
+      if (isModelUnavailable(error) && model.demote()) continue;
+      throw error;
+    }
+  }
 }
 
 export async function* streamCrewTurn(input: {
@@ -399,6 +467,7 @@ export async function* streamCrewTurn(input: {
     throw new Error("OPENAI_API_KEY is not set");
   }
 
+  const model = createModelSlot();
   const ts = nowIso();
   yield workingStatus("Gathering web leads…");
   const web = await searchPolicyWeb(input.latestMessage || input.question);
@@ -418,20 +487,26 @@ export async function* streamCrewTurn(input: {
 
   yield* streamNarration({
     agent: "scoper",
+    model,
     fallback: "Locking a working scope so the rest of the crew can place nodes.",
-    system:
-      "You are PoliNote's scoper. In 3–6 sentences, lock instrument, target, identification, and horizon for THIS question. No JSON.",
+    system: `You are PoliNote's scoper. Write 3–5 short paragraphs for a researcher.
+Name the instrument, target variable, identification strategy, horizon, baseline, and incidence cut.
+Say what is still missing. No JSON. Use blank lines between paragraphs.`,
     prompt: context,
   });
 
   let scopeOut: ScopeStep;
   try {
-    scopeOut = coerceScope(await askJson(
-      `You are PoliNote's scoper. Return JSON with runTitle and scope.
+    scopeOut = coerceScope(
+      await askJson(
+        model,
+        `You are PoliNote's scoper. Return JSON with runTitle and scope.
 scope needs: jurisdiction, horizon, objective, instrument, target, identificationStrategy, distributionalCut, baseline, allowedMethods (from literature, time_series, legal_text, macro, incidence, counterfactual, expert_judgment), forbiddenMoves.
-Fill instrument, target, identification strategy, and horizon. runTitle max 80 chars.`,
-      context,
-    ), input.question);
+Write specific working values for THIS question, not placeholders. runTitle max 80 chars.`,
+        context,
+      ),
+      input.question,
+    );
   } catch (error) {
     console.error(
       "[polinote/crew] scope json failed, using fallback",
@@ -451,9 +526,11 @@ Fill instrument, target, identification strategy, and horizon. runTitle max 80 c
 
   yield* streamNarration({
     agent: "literature",
+    model,
     fallback: "Placing claims, mechanisms, and uncertainties on the map.",
-    system:
-      "You are PoliNote's literature / mechanism crew. In 3–6 sentences, say which claims, mechanisms, and uncertainties you are about to place. No JSON.",
+    system: `You are PoliNote's literature / mechanism / incidence crew.
+Write 3–5 short paragraphs naming the forks you will place: partial-equilibrium employment, input costs, retaliation, real-income/CPI, investment lags, fiscal, regional concentration, legal overlay — whichever apply.
+Be specific to THIS instrument. No JSON. Blank lines between paragraphs.`,
     prompt: JSON.stringify({
       question: input.question,
       scope: scopeOut.scope,
@@ -463,32 +540,46 @@ Fill instrument, target, identification strategy, and horizon. runTitle max 80 c
 
   let graphOut: GraphStep;
   try {
-    graphOut = coerceGraph(await askJson(
-      `You are PoliNote's literature / mechanism / incidence crew.
+    graphOut = coerceGraph(
+      await askJson(
+        model,
+        `You are PoliNote's literature / mechanism / incidence crew.
 Return JSON: { "nodes": [...], "edges": [...] }.
-4–6 nodes. Each node: key, kind (claim|mechanism|constraint|evidence|counterfactual|incidence|uncertainty|fork), title, body, analysis, optional status (proposed|contested), confidence, agent, analysisTitle.
-Never use supported.
+6–8 nodes. Include at least: one claim, one mechanism, one incidence, one uncertainty, one counterfactual, and one constraint or fork.
+Each node: key, kind, title, body, analysis, analysisTitle, status (proposed|contested), confidence, agent.
+body: 2–4 sentences, the canvas claim.
+analysis: markdown with these H2 sections, each 1–2 dense paragraphs:
+## Mechanism
+## Incidence
+## Identification
+## Sign flip
+## Missing evidence
+Never use supported. Cite only the reputable webLeads provided. If a lead is not official or academic, ignore it.
 Edges: sourceKey, targetKey, kind (supports|attacks|depends_on|elaborates|alternatives|causal).
-Keys like claim_price, mech_pass. Body and analysis can be 2–4 sentences.
-Web snippets are unverified leads, not proof.`,
-      JSON.stringify({
-        question: input.question,
-        latestUserMessage: input.latestMessage,
-        scope: scopeOut.scope,
-        existingNodeTitles: input.prior?.nodeTitles ?? [],
-        webLeads: web,
-      }),
-    ));
+Keys like claim_emp, mech_pass, inc_region, unc_id.`,
+        JSON.stringify({
+          question: input.question,
+          latestUserMessage: input.latestMessage,
+          scope: scopeOut.scope,
+          existingNodeTitles: input.prior?.nodeTitles ?? [],
+          webLeads: web,
+        }),
+      ),
+    );
   } catch (error) {
     console.error(
       "[polinote/crew] graph json failed, retrying simpler",
       error instanceof Error ? error.message : error,
     );
-    graphOut = coerceGraph(await askJson(
-      `Return JSON only: { "nodes": [ { "key": "claim_1", "kind": "claim", "title": "...", "body": "...", "analysis": "..." } ], "edges": [ { "sourceKey": "claim_1", "targetKey": "mech_1", "kind": "supports" } ] }.
-Give 4 nodes and 3 edges for this policy question. Short strings. No markdown.`,
-      input.latestMessage || input.question,
-    ));
+    graphOut = coerceGraph(
+      await askJson(
+        model,
+        `Return JSON only: { "nodes": [...], "edges": [...] }.
+Give 6 nodes and 5 edges for this policy question.
+Each analysis field is markdown with ## Mechanism, ## Incidence, ## Identification, ## Sign flip, ## Missing evidence.`,
+        input.latestMessage || input.question,
+      ),
+    );
   }
 
   const keyToId = new Map<string, string>();
@@ -524,9 +615,11 @@ Give 4 nodes and 3 edges for this policy question. Short strings. No markdown.`,
   yield workingStatus("Critic is reviewing the graph…");
   yield* streamNarration({
     agent: "critic",
+    model,
     fallback: "Identification and incidence still need harder evidence before any node is supported.",
-    system:
-      "You are PoliNote's critic. Challenge identification, incidence, and missing evidence on THIS graph. 3–6 sentences. No JSON.",
+    system: `You are PoliNote's critic. Write 3–5 short paragraphs.
+Attack identification, omitted channels, incidence hiding, and any claim that would need an MCP span to become supported.
+Name nodes by title. No new positive claims. No JSON. Blank lines between paragraphs.`,
     prompt: JSON.stringify({
       question: input.question,
       scope: scopeOut.scope,

@@ -33,7 +33,9 @@ export function Thread({ items, onOpenNode, listRef }: ThreadProps) {
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
                   {item.agent}
                 </p>
-                <p className="mt-1.5 text-[15px] leading-[1.65] text-[var(--ink)]/92">{item.text}</p>
+                <p className="mt-1.5 whitespace-pre-wrap text-[15px] leading-[1.65] text-[var(--ink)]/92">
+                  {item.text}
+                </p>
               </div>
             );
           }
