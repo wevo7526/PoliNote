@@ -1,5 +1,5 @@
 import { appendRunEvent, ensureEventsTable, listEvents } from "@/lib/db/events";
-import { asJson, queryRows, withUserDb } from "@/lib/db/user-store";
+import { asJson, mutateUserDb, queryRows, withUserDb } from "@/lib/db/user-store";
 import type { RunDraft, RunSnapshot, RunSummary } from "@/lib/platform-types";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
@@ -43,7 +43,7 @@ export async function createRun(userId: string): Promise<RunSummary> {
     createdAt: ts,
     updatedAt: ts,
   };
-  await withUserDb(userId, async (connection) => {
+  await mutateUserDb(userId, async (connection) => {
     await connection.run(
       `INSERT INTO runs (id, title, status, created_at, updated_at)
        VALUES ($id, $title, $status, $created_at, $updated_at)`,
@@ -186,7 +186,7 @@ export async function persistTurn(
   },
 ): Promise<void> {
   const ts = nowIso();
-  await withUserDb(userId, async (connection) => {
+  await mutateUserDb(userId, async (connection) => {
     await connection.run(
       `UPDATE runs SET title = $title, status = $status, updated_at = $updated_at WHERE id = $id`,
       { title: input.title, status: input.status, updated_at: ts, id: runId },
@@ -261,7 +261,7 @@ export async function deleteRun(
   runId: string,
 ): Promise<boolean> {
   if (!(await assertRunExists(userId, runId))) return false;
-  await withUserDb(userId, async (connection) => {
+  await mutateUserDb(userId, async (connection) => {
     await ensureEventsTable(connection);
     await connection.run(`DELETE FROM messages WHERE run_id = $id`, { id: runId });
     await connection.run(`DELETE FROM nodes WHERE run_id = $id`, { id: runId });
@@ -282,7 +282,7 @@ export async function persistScope(
   scope: ScopeContract,
 ): Promise<RunSnapshot | null> {
   const ts = nowIso();
-  await withUserDb(userId, async (connection) => {
+  await mutateUserDb(userId, async (connection) => {
     await connection.run(
       `INSERT OR REPLACE INTO scopes (run_id, data) VALUES ($run_id, $data)`,
       { run_id: runId, data: JSON.stringify({ ...scope, updatedAt: ts }) },

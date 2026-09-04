@@ -1,4 +1,4 @@
-import { queryRows, withUserDb } from "@/lib/db/user-store";
+import { mutateUserDb, queryRows, withUserDb } from "@/lib/db/user-store";
 import { isUserId } from "@/lib/session";
 import { resultHash, spanId } from "@/lib/mcp/hash";
 import type { EvidenceSpan } from "@/schemas/span";
@@ -44,7 +44,7 @@ export async function writeMemo(
   const body = typeof args.body === "string" ? args.body : "";
   if (!body.trim()) return { ok: false, error: "body required" };
   const ts = new Date().toISOString();
-  await withUserDb(session.userId, async (connection) => {
+  await mutateUserDb(session.userId, async (connection) => {
     await connection.run(
       `INSERT OR REPLACE INTO memos (run_id, body, updated_at)
        VALUES ($run_id, $body, $updated_at)`,

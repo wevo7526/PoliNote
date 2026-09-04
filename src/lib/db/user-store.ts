@@ -6,6 +6,11 @@ import type {
   DuckDBInstance,
   DuckDBValue,
 } from "@duckdb/node-api";
+import {
+  blobPersistenceEnabled,
+  hydrateUserDbFile,
+  persistUserDbFile,
+} from "@/lib/db/user-db-blob";
 import { isUserId } from "@/lib/session";
 
 type DuckApi = typeof import("@duckdb/node-api");
@@ -53,6 +58,7 @@ type UserDb = {
 type DuckCache = {
   dbs: Map<string, UserDb>;
   opening: Map<string, Promise<UserDb>>;
+  queues: Map<string, Promise<unknown>>;
 };
 
 const globalForDuck = globalThis as typeof globalThis & {
@@ -64,9 +70,14 @@ function duckCache(): DuckCache {
     globalForDuck.__polinoteDuck = {
       dbs: new Map(),
       opening: new Map(),
+      queues: new Map(),
     };
   }
   return globalForDuck.__polinoteDuck;
+}
+
+function isEphemeralRuntime(): boolean {
+  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 }
 
 const SCHEMA = `
@@ -160,6 +171,19 @@ export function userDbPath(userId: string): string {
   return path.join(usersDir(), `${userId}.duckdb`);
 }
 
+function closeQuietly(instance: DuckDBInstance, connection?: DuckDBConnection): void {
+  try {
+    connection?.closeSync();
+  } catch {
+    /* already closed */
+  }
+  try {
+    instance.closeSync();
+  } catch {
+    /* already closed */
+  }
+}
+
 async function openUserDb(userId: string): Promise<UserDb> {
   const cache = duckCache();
   const hit = cache.dbs.get(userId);
@@ -189,7 +213,7 @@ async function openUserDb(userId: string): Promise<UserDb> {
   return opening;
 }
 
-export async function withUserDb<T>(
+async function withLocalUserDb<T>(
   userId: string,
   fn: (connection: DuckDBConnection) => Promise<T>,
 ): Promise<T> {
@@ -206,6 +230,68 @@ export async function withUserDb<T>(
     () => undefined,
   );
   return run;
+}
+
+async function withEphemeralUserDb<T>(
+  userId: string,
+  fn: (connection: DuckDBConnection) => Promise<T>,
+  persist: boolean,
+): Promise<T> {
+  await mkdir(usersDir(), { recursive: true });
+  const filePath = userDbPath(userId);
+  await hydrateUserDbFile(userId, filePath);
+  const { DuckDBInstance } = await loadDuckdb();
+  const instance = await DuckDBInstance.create(filePath);
+  const connection = await instance.connect();
+  try {
+    await connection.run(SCHEMA);
+    await connection.run(EXTRA_SCHEMA);
+    const result = await fn(connection);
+    if (persist) {
+      if (!blobPersistenceEnabled()) {
+        throw new Error(
+          "DuckDB cannot persist across Vercel functions without Blob storage",
+        );
+      }
+      await connection.run("CHECKPOINT");
+      closeQuietly(instance, connection);
+      await persistUserDbFile(userId, filePath);
+    }
+    return result;
+  } finally {
+    closeQuietly(instance, connection);
+  }
+}
+
+export async function withUserDb<T>(
+  userId: string,
+  fn: (connection: DuckDBConnection) => Promise<T>,
+  options?: { persist?: boolean },
+): Promise<T> {
+  if (!isEphemeralRuntime()) {
+    return withLocalUserDb(userId, fn);
+  }
+
+  const cache = duckCache();
+  const previous = cache.queues.get(userId) ?? Promise.resolve();
+  const run = previous.then(() =>
+    withEphemeralUserDb(userId, fn, Boolean(options?.persist)),
+  );
+  cache.queues.set(
+    userId,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}
+
+export async function mutateUserDb<T>(
+  userId: string,
+  fn: (connection: DuckDBConnection) => Promise<T>,
+): Promise<T> {
+  return withUserDb(userId, fn, { persist: true });
 }
 
 export async function queryRows<T extends Record<string, unknown>>(

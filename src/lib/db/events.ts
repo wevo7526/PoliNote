@@ -1,5 +1,5 @@
 import type { DuckDBConnection } from "@duckdb/node-api";
-import { asJson, queryRows, withUserDb } from "@/lib/db/user-store";
+import { asJson, mutateUserDb, queryRows, withUserDb } from "@/lib/db/user-store";
 import type { RunEvent, RunEventType } from "@/schemas/run-event";
 
 const ENSURE = `
@@ -88,7 +88,7 @@ export async function appendRunEvent(
   draft: RunEventDraft,
 ): Promise<RunEvent> {
   const ts = new Date().toISOString();
-  return withUserDb(userId, async (connection) => {
+  return mutateUserDb(userId, async (connection) => {
     await connection.run(ENSURE);
     const seqRows = await queryRows<{ next: number }>(
       connection,
