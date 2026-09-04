@@ -11,11 +11,33 @@ export function isUserId(value: string): boolean {
   return UUID_RE.test(value);
 }
 
+function isServerless(): boolean {
+  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
+function writableSecretDir(): string {
+  if (isServerless()) {
+    return path.join("/tmp", "polinote");
+  }
+  return path.join(process.cwd(), "data");
+}
+
+function derivedSecret(): string | null {
+  const seed = process.env.VERCEL_PROJECT_ID?.trim();
+  if (!seed) return null;
+  return createHmac("sha256", "polinote-session").update(seed).digest("hex");
+}
+
 async function sessionSecret(): Promise<string> {
   if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 16) {
     return process.env.SESSION_SECRET;
   }
-  const dir = path.join(process.cwd(), "data");
+
+  // Vercel's function FS is read-only. Never mkdir under /var/task.
+  const derived = derivedSecret();
+  if (derived) return derived;
+
+  const dir = writableSecretDir();
   const file = path.join(dir, ".session-secret");
   try {
     const existing = (await readFile(file, "utf8")).trim();
@@ -23,15 +45,24 @@ async function sessionSecret(): Promise<string> {
   } catch {
     // first boot
   }
-  await mkdir(dir, { recursive: true });
+
   const generated = randomBytes(32).toString("hex");
-  await writeFile(file, generated, { encoding: "utf8", flag: "wx" }).catch(
-    async () => {
-      // lost the race — read whatever won
-    },
-  );
-  const again = (await readFile(file, "utf8")).trim();
-  return again.length >= 16 ? again : generated;
+  try {
+    await mkdir(dir, { recursive: true });
+    await writeFile(file, generated, { encoding: "utf8", flag: "wx" }).catch(
+      async () => {
+        /* lost the race — read whatever won */
+      },
+    );
+    const again = (await readFile(file, "utf8")).trim();
+    if (again.length >= 16) return again;
+  } catch (error) {
+    console.error(
+      "[polinote/session] could not persist session secret",
+      error instanceof Error ? error.message : error,
+    );
+  }
+  return generated;
 }
 
 function sign(userId: string, secret: string): string {

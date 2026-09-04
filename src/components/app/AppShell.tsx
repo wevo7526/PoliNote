@@ -25,6 +25,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     activeId,
     snapshot,
     creating,
+    createError,
     newRun,
     selectRun,
     deleteRun,
@@ -75,10 +76,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             {creating ? "Opening…" : "New run"}
           </button>
-          <p className="mt-2 text-[11px] leading-snug text-[var(--muted)]">
-            {snapshot
-              ? `Active · ${snapshot.run.title}`
-              : "Pick or create a run. Isolation is per session."}
+          <p
+            className={`mt-2 text-[11px] leading-snug ${
+              createError ? "text-[var(--copper)]" : "text-[var(--muted)]"
+            }`}
+          >
+            {createError
+              ? createError
+              : snapshot
+                ? `Active · ${snapshot.run.title}`
+                : "Pick or create a run. Isolation is per session."}
           </p>
         </div>
 

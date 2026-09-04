@@ -26,6 +26,7 @@ type WorkspaceContextValue = {
   activeId: string | null;
   snapshot: RunSnapshot | null;
   creating: boolean;
+  createError: string | null;
   loadingRun: boolean;
   busy: boolean;
   selectRun: (id: string) => Promise<void>;
@@ -96,6 +97,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [creating, setCreating] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const snapshotRef = useRef<RunSnapshot | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -167,9 +169,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const newRun = useCallback(async () => {
     setCreating(true);
+    setCreateError(null);
     try {
       const response = await fetch("/api/runs", { method: "POST" });
-      if (!response.ok) return;
+      if (!response.ok) {
+        const failed = await response.json().catch(() => null);
+        const message =
+          failed && typeof failed === "object" && "error" in failed
+            ? String(failed.error)
+            : `Could not open a run (${response.status})`;
+        setCreateError(message);
+        return;
+      }
       const data = await readJson<{ run: RunSummary }>(response);
       const loaded = await fetch(`/api/runs/${data.run.id}`);
       if (loaded.ok) {
@@ -187,6 +198,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         });
       }
       router.replace(`/app/run?run=${data.run.id}`);
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Could not open a run.");
     } finally {
       setCreating(false);
     }
@@ -308,6 +321,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       activeId,
       snapshot,
       creating,
+      createError,
       loadingRun,
       busy,
       selectRun,
@@ -321,6 +335,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       activeId,
       snapshot,
       creating,
+      createError,
       loadingRun,
       busy,
       selectRun,
