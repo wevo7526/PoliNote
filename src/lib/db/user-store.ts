@@ -11,6 +11,7 @@ type UserDb = {
   instance: DuckDBInstance;
   connection: DuckDBConnection;
   queue: Promise<unknown>;
+  extras: boolean;
 };
 
 type DuckCache = {
@@ -69,6 +70,43 @@ CREATE TABLE IF NOT EXISTS analyses (
   body VARCHAR NOT NULL,
   citations JSON NOT NULL
 );
+CREATE TABLE IF NOT EXISTS events (
+  id VARCHAR PRIMARY KEY,
+  run_id VARCHAR NOT NULL,
+  seq INTEGER NOT NULL,
+  type VARCHAR NOT NULL,
+  ts VARCHAR NOT NULL,
+  agent VARCHAR,
+  span_id VARCHAR,
+  parent_span_id VARCHAR,
+  payload JSON NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS events_run_seq ON events (run_id, seq);
+CREATE TABLE IF NOT EXISTS drafts (
+  run_id VARCHAR PRIMARY KEY,
+  brief VARCHAR NOT NULL,
+  appendix VARCHAR NOT NULL,
+  updated_at VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memos (
+  run_id VARCHAR PRIMARY KEY,
+  body VARCHAR NOT NULL,
+  updated_at VARCHAR NOT NULL
+);
+`;
+
+const EXTRA_SCHEMA = `
+CREATE TABLE IF NOT EXISTS drafts (
+  run_id VARCHAR PRIMARY KEY,
+  brief VARCHAR NOT NULL,
+  appendix VARCHAR NOT NULL,
+  updated_at VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memos (
+  run_id VARCHAR PRIMARY KEY,
+  body VARCHAR NOT NULL,
+  updated_at VARCHAR NOT NULL
+);
 `;
 
 function usersDir(): string {
@@ -103,7 +141,7 @@ async function openUserDb(userId: string): Promise<UserDb> {
 
     const connection = await instance.connect();
     await connection.run(SCHEMA);
-    const db: UserDb = { instance, connection, queue: Promise.resolve() };
+    const db: UserDb = { instance, connection, queue: Promise.resolve(), extras: true };
     cache.dbs.set(userId, db);
     return db;
   })().finally(() => {
@@ -119,7 +157,13 @@ export async function withUserDb<T>(
   fn: (connection: DuckDBConnection) => Promise<T>,
 ): Promise<T> {
   const db = await openUserDb(userId);
-  const run = db.queue.then(() => fn(db.connection));
+  const run = db.queue.then(async () => {
+    if (!db.extras) {
+      await db.connection.run(EXTRA_SCHEMA);
+      db.extras = true;
+    }
+    return fn(db.connection);
+  });
   db.queue = run.then(
     () => undefined,
     () => undefined,

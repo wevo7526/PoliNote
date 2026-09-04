@@ -128,6 +128,7 @@ export function LiveGraph({
                 style={{ textTransform: "uppercase" }}
               >
                 {node.kind}
+                {node.status === "supported" ? " · supported" : ""}
               </text>
               <text
                 x={node.position.x + 26}

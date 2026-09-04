@@ -171,9 +171,31 @@ body {
   background: var(--copper);
 }
 
+.run-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.15rem;
+}
+
 .run-item {
   border: 1px solid transparent;
   padding: 0.7rem 0.75rem;
+}
+
+.run-delete {
+  flex: 0 0 auto;
+  align-self: center;
+  border: 1px solid transparent;
+  padding: 0.35rem 0.45rem;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.run-delete:hover {
+  border-color: var(--line);
+  color: var(--ink);
 }
 
 .run-item:hover,

@@ -1,7 +1,7 @@
 /**
- * LangGraph crew entry (phase: langgraph-crew).
- * Role-separated StateGraph: Scoper → Instrument → specialists → Critic → Synthesizer.
- * Checkpointed turns via Postgres — do not run full digressions in one serverless invoke.
+ * Crew roles with hard mutation walls in src/agents/walls.ts.
+ * Live runner is sequential in src/lib/ai/crew.ts:
+ * scoper → instrument_parser → literature → MCP specialists → critic → synthesizer → trace.
  */
 
 export const CREW_ROLES = [

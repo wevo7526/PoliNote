@@ -3,6 +3,7 @@ import type { RunSnapshot } from "@/lib/platform-types";
 import type { ThreadItem } from "@/components/studio/thread-types";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
+import type { RunEvent } from "@/schemas/run-event";
 import type { ScopeContract } from "@/schemas/scope-contract";
 
 export const WORKING_STATUS_ID = "crew-working";
@@ -18,7 +19,19 @@ export type CrewStreamEvent =
   | { type: "analysis"; analysis: NodeAnalysis }
   | { type: "title"; title: string }
   | { type: "error"; message: string }
-  | { type: "done" };
+  | { type: "done" }
+  | { type: "log"; event: RunEvent }
+  | {
+      type: "mcp";
+      agent: string;
+      server: string;
+      tool: string;
+      ok: boolean;
+      label: string;
+      spanId?: string;
+    }
+  | { type: "draft"; brief: string; appendix: string }
+  | { type: "flag"; nodeId: string; message: string };
 
 export function workingStatus(text: string): CrewStreamEvent {
   return {
@@ -41,6 +54,12 @@ export function publicCrewError(error: unknown): string {
   if (/model/i.test(raw) && /not found|does not exist|unsupported/i.test(raw)) {
     return "The configured OpenAI model is not available on this key.";
   }
+  if (/already closed|controller is already closed/i.test(raw)) {
+    return "The run stream closed while the crew was still writing. Refresh the run — saved nodes stay.";
+  }
+  if (/verified to generate reasoning summaries|reasoning\.summary/i.test(raw)) {
+    return "OpenAI blocked reasoning summaries on this organization. The crew will retry without them.";
+  }
   if (/timeout|etimedout|aborted|abort/i.test(raw)) {
     return "The crew timed out mid-turn.";
   }
@@ -52,7 +71,12 @@ export function applyCrewEvent(
   snapshot: RunSnapshot,
   event: CrewStreamEvent,
 ): RunSnapshot {
+  snapshot = { ...snapshot, events: snapshot.events ?? [], draft: snapshot.draft ?? null };
   switch (event.type) {
+    case "log": {
+      if (snapshot.events.some((item) => item.id === event.event.id)) return snapshot;
+      return { ...snapshot, events: [...snapshot.events, event.event] };
+    }
     case "user": {
       const lastUser = [...snapshot.items]
         .reverse()
@@ -166,6 +190,25 @@ export function applyCrewEvent(
         run: { ...snapshot.run, status: "ready" },
         items: snapshot.items.filter((item) => item.id !== WORKING_STATUS_ID),
       };
+    case "draft":
+      return {
+        ...snapshot,
+        draft: {
+          brief: event.brief,
+          appendix: event.appendix,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    case "flag": {
+      const nodes = snapshot.nodes.map((node) =>
+        node.id === event.nodeId && node.status === "proposed"
+          ? { ...node, status: "contested" as const }
+          : node,
+      );
+      return { ...snapshot, nodes };
+    }
+    case "mcp":
+      return snapshot;
     default:
       return snapshot;
   }

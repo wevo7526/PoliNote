@@ -1,5 +1,6 @@
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
+import type { RunEvent } from "@/schemas/run-event";
 import type { ScopeContract } from "@/schemas/scope-contract";
 import type { ThreadItem } from "@/components/studio/thread-types";
 
@@ -11,6 +12,12 @@ export type RunSummary = {
   updatedAt: string;
 };
 
+export type RunDraft = {
+  brief: string;
+  appendix: string;
+  updatedAt: string;
+};
+
 export type RunSnapshot = {
   run: RunSummary;
   items: ThreadItem[];
@@ -18,4 +25,6 @@ export type RunSnapshot = {
   edges: DigressionEdge[];
   scope: ScopeContract | null;
   analyses: Record<string, NodeAnalysis>;
+  events: RunEvent[];
+  draft: RunDraft | null;
 };

@@ -27,6 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     creating,
     newRun,
     selectRun,
+    deleteRun,
   } = useWorkspace();
 
   return (
@@ -92,13 +93,13 @@ export function AppShell({ children }: { children: ReactNode }) {
               {runs.map((run) => {
                 const active = run.id === activeId;
                 return (
-                  <li key={run.id}>
+                  <li key={run.id} className="run-row">
                     <button
                       type="button"
                       onClick={() => {
                         void selectRun(run.id);
                       }}
-                      className={`run-item w-full text-left ${active ? "is-active" : ""}`}
+                      className={`run-item min-w-0 flex-1 text-left ${active ? "is-active" : ""}`}
                     >
                       <span className="block truncate font-medium text-[var(--ink)]">
                         {run.title}
@@ -106,6 +107,23 @@ export function AppShell({ children }: { children: ReactNode }) {
                       <span className="mt-1 block text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
                         {run.status} · {formatWhen(run.updatedAt)}
                       </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="run-delete"
+                      aria-label={`Delete ${run.title}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (
+                          window.confirm(
+                            `Delete “${run.title}”? This clears the run from your slate.`,
+                          )
+                        ) {
+                          void deleteRun(run.id);
+                        }
+                      }}
+                    >
+                      Delete
                     </button>
                   </li>
                 );

@@ -1,7 +1,7 @@
 /**
  * Shared TypeScript tool registry.
  * MCP route handlers wrap these same functions (no self-HTTP for in-app agents).
- * Filled in later phases (econ-series / literature / policy-docs / workspace / trace).
+ * Handlers are registered by src/lib/mcp/register.ts.
  */
 
 export type ToolName =

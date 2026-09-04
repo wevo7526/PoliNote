@@ -14,6 +14,16 @@ export function SourcesDesk() {
     );
   }
 
+  const spans = (snapshot?.nodes ?? []).flatMap((node) =>
+    node.provenance
+      .filter((chip) => chip.spanId)
+      .map((chip) => ({
+        ...chip,
+        nodeTitle: node.title,
+        nodeId: node.id,
+        status: node.status,
+      })),
+  );
   const citations = Object.values(snapshot?.analyses ?? {}).flatMap((analysis) =>
     analysis.citations.map((citation) => ({
       ...citation,
@@ -21,11 +31,13 @@ export function SourcesDesk() {
       analysisTitle: analysis.title,
     })),
   );
-  const provenance = (snapshot?.nodes ?? []).flatMap((node) =>
-    node.provenance.map((chip) => ({
-      ...chip,
-      nodeTitle: node.title,
-    })),
+  const webProvenance = (snapshot?.nodes ?? []).flatMap((node) =>
+    node.provenance
+      .filter((chip) => !chip.spanId)
+      .map((chip) => ({
+        ...chip,
+        nodeTitle: node.title,
+      })),
   );
 
   return (
@@ -39,17 +51,40 @@ export function SourcesDesk() {
             Evidence locker
           </h1>
           <p className="mt-2 max-w-xl text-sm text-[var(--muted)]">
-            Leads from Firecrawl and node provenance for this run. Series-backed
-            support still waits on MCP spans.
+            MCP spans can move a node to supported. Web leads stay informational.
           </p>
         </header>
 
         <div className="grid gap-3 p-5">
-          {citations.length === 0 && provenance.length === 0 ? (
+          {spans.length === 0 && citations.length === 0 && webProvenance.length === 0 ? (
             <p className="text-sm text-[var(--muted)]">
-              No sources yet. After a Run turn, citations land here.
+              No sources yet. After a Run turn, MCP spans and citations land here.
             </p>
           ) : null}
+
+          {spans.map((span, index) => (
+            <article key={`${span.spanId}-${index}`} className="source-card">
+              <p className="text-[10px] uppercase tracking-[0.12em] text-[var(--copper)]">
+                MCP span · {span.source} · {span.nodeTitle}
+                {span.status === "supported" ? " · supported" : ""}
+              </p>
+              <h2 className="mt-1 font-[family-name:var(--font-display)] text-lg">
+                {span.url ? (
+                  <a
+                    href={span.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hover:text-[var(--copper)]"
+                  >
+                    {span.label}
+                  </a>
+                ) : (
+                  span.label
+                )}
+              </h2>
+              <p className="mt-2 font-mono text-[11px] text-[var(--muted)]">{span.spanId}</p>
+            </article>
+          ))}
 
           {citations.map((citation, index) => (
             <article key={`${citation.url ?? citation.title}-${index}`} className="source-card">
@@ -78,7 +113,7 @@ export function SourcesDesk() {
             </article>
           ))}
 
-          {provenance.map((chip, index) => (
+          {webProvenance.map((chip, index) => (
             <article key={`${chip.label}-${index}`} className="source-card">
               <p className="text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
                 {chip.source} · {chip.nodeTitle}

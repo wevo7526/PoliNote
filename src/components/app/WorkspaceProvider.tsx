@@ -32,6 +32,7 @@ type WorkspaceContextValue = {
   newRun: () => Promise<void>;
   send: (text: string) => Promise<void>;
   saveScope: (scope: ScopeContract) => Promise<boolean>;
+  deleteRun: (id: string) => Promise<void>;
 };
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -103,8 +104,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [snapshot]);
 
   const applySnapshot = useCallback((next: RunSnapshot) => {
-    snapshotRef.current = next;
-    applyAndSyncRuns(next, setSnapshot, setActiveId, setRuns);
+    const normalized = { ...next, events: next.events ?? [] };
+    snapshotRef.current = normalized;
+    applyAndSyncRuns(normalized, setSnapshot, setActiveId, setRuns);
   }, []);
 
   const setRunInUrl = useCallback(
@@ -169,15 +171,21 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const response = await fetch("/api/runs", { method: "POST" });
       if (!response.ok) return;
       const data = await readJson<{ run: RunSummary }>(response);
-      const empty: RunSnapshot = {
-        run: data.run,
-        items: [],
-        nodes: [],
-        edges: [],
-        scope: null,
-        analyses: {},
-      };
-      applySnapshot(empty);
+      const loaded = await fetch(`/api/runs/${data.run.id}`);
+      if (loaded.ok) {
+        applySnapshot(await readJson<RunSnapshot>(loaded));
+      } else {
+        applySnapshot({
+          run: data.run,
+          items: [],
+          nodes: [],
+          edges: [],
+          scope: null,
+          analyses: {},
+          events: [],
+          draft: null,
+        });
+      }
       router.replace(`/app/run?run=${data.run.id}`);
     } finally {
       setCreating(false);
@@ -269,6 +277,31 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [activeId, applySnapshot],
   );
 
+  const deleteRun = useCallback(
+    async (id: string) => {
+      if (snapshotRef.current?.run.id === id) {
+        abortRef.current?.abort();
+      }
+      const response = await fetch(`/api/runs/${id}`, { method: "DELETE" });
+      if (!response.ok) return;
+      let remaining: RunSummary[] = [];
+      setRuns((prev) => {
+        remaining = prev.filter((run) => run.id !== id);
+        return remaining;
+      });
+      if (activeId !== id && snapshotRef.current?.run.id !== id) return;
+      snapshotRef.current = null;
+      setSnapshot(null);
+      setActiveId(null);
+      if (remaining[0]) {
+        await selectRun(remaining[0].id);
+        return;
+      }
+      router.replace(pathname);
+    },
+    [activeId, pathname, router, selectRun],
+  );
+
   const value = useMemo(
     () => ({
       runs,
@@ -281,6 +314,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       newRun,
       send,
       saveScope,
+      deleteRun,
     }),
     [
       runs,
@@ -293,6 +327,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       newRun,
       send,
       saveScope,
+      deleteRun,
     ],
   );
 

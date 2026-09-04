@@ -61,6 +61,37 @@ export function AnalysisModal({ node, analysis, onClose }: AnalysisModalProps) {
         <div className="modal-body">
           <AnalysisBody text={analysis?.body ?? node.body} />
 
+          {node.provenance.some((chip) => chip.spanId) ? (
+            <div className="mt-6">
+              <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+                MCP spans
+              </h3>
+              <ul className="mt-2 space-y-2 text-sm">
+                {node.provenance
+                  .filter((chip) => chip.spanId)
+                  .map((chip) => (
+                    <li key={chip.spanId}>
+                      {chip.url ? (
+                        <a
+                          href={chip.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[var(--copper)] underline-offset-2 hover:underline"
+                        >
+                          {chip.label}
+                        </a>
+                      ) : (
+                        <span>{chip.label}</span>
+                      )}
+                      <p className="mt-0.5 font-mono text-[11px] text-[var(--muted)]">
+                        {chip.spanId}
+                      </p>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          ) : null}
+
           {analysis && analysis.citations.length > 0 ? (
             <div className="mt-6">
               <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">

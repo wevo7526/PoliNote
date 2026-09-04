@@ -1,13 +1,6 @@
 /**
- * In-app MCP servers (Streamable HTTP via mcp-handler).
- * Routes live under src/app/api/mcp/* and wrap src/tools/registry.
- *
- * Planned endpoints:
- *   /api/mcp/econ-series
- *   /api/mcp/policy-docs
- *   /api/mcp/literature
- *   /api/mcp/workspace
- *   /api/mcp/trace
+ * In-app MCP servers. JSON routes at /api/mcp/[server] wrap src/tools/registry.
+ * In-app agents call the registry directly — they do not HTTP themselves.
  */
 
 export const MCP_SERVERS = [

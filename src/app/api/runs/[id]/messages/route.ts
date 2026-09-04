@@ -4,6 +4,8 @@ import {
   publicCrewError,
   type CrewStreamEvent,
 } from "@/lib/ai/crew-events";
+import { draftsFromCrewEvent } from "@/lib/ai/run-log";
+import { appendRunEvent } from "@/lib/db/events";
 import { assertRunExists, getRun, persistTurn } from "@/lib/db/runs";
 import { getSessionUserId } from "@/lib/session";
 import type { RunSnapshot } from "@/lib/platform-types";
@@ -28,6 +30,7 @@ async function persistSnapshot(userId: string, snapshot: RunSnapshot): Promise<v
     edges: snapshot.edges,
     scope: snapshot.scope,
     analyses: Object.values(snapshot.analyses),
+    draft: snapshot.draft,
   });
 }
 
@@ -63,60 +66,140 @@ export async function POST(request: Request, ctx: RouteCtx) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (event: CrewStreamEvent) => {
-        controller.enqueue(encodeSse(event));
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
       };
+      const send = (event: CrewStreamEvent) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encodeSse(event));
+        } catch {
+          closed = true;
+        }
+      };
+
+      request.signal.addEventListener("abort", () => {
+        closed = true;
+      });
 
       let snapshot: RunSnapshot = applyCrewEvent(
         {
           ...current,
+          events: current.events ?? [],
           run: { ...current.run, status: "running" },
         },
         { type: "user", item: userItem },
       );
 
-      try {
-        send({ type: "user", item: userItem });
-        await persistSnapshot(userId, snapshot);
-
-        let lastPersist: "scope" | "node" | null = null;
-        for await (const event of streamCrewTurn({
-          runId,
-          question: originalQuestion,
-          latestMessage: text,
-          prior: {
-            scope: current.scope,
-            nodeTitles: current.nodes.map((node) => node.title),
-          },
-        })) {
-          snapshot = applyCrewEvent(snapshot, event);
-          send(event);
-          if (event.type === "scope" && lastPersist !== "scope") {
-            lastPersist = "scope";
-            await persistSnapshot(userId, snapshot);
-          }
-        }
-
-        snapshot = {
-          ...snapshot,
-          run: { ...snapshot.run, status: "ready" },
-        };
-        await persistSnapshot(userId, snapshot);
-      } catch (error) {
-        const message = publicCrewError(error);
-        console.error("[polinote/messages]", message);
-        const fail = applyCrewEvent(snapshot, { type: "error", message });
-        send({ type: "error", message });
+      const persistSafe = async (next: RunSnapshot) => {
         try {
-          await persistSnapshot(userId, fail);
+          await persistSnapshot(userId, next);
         } catch (persistError) {
           console.error(
             "[polinote/messages] persist failed",
             persistError instanceof Error ? persistError.message : persistError,
           );
         }
+      };
+
+      const seenNarration = new Set<string>();
+      const knownNodes = new Set(snapshot.nodes.map((node) => node.id));
+      const emitLogs = async (event: CrewStreamEvent) => {
+        for (const draft of draftsFromCrewEvent(event, seenNarration, knownNodes)) {
+          const logged = await appendRunEvent(userId, runId, draft);
+          snapshot = applyCrewEvent(snapshot, { type: "log", event: logged });
+          send({ type: "log", event: logged });
+          if (event.type === "node") knownNodes.add(event.node.id);
+        }
+      };
+
+      try {
+        send({ type: "user", item: userItem });
+        const started = await appendRunEvent(userId, runId, {
+          type: "run.started",
+          payload: { question: originalQuestion },
+        });
+        snapshot = applyCrewEvent(snapshot, { type: "log", event: started });
+        send({ type: "log", event: started });
+        await persistSafe(snapshot);
+
+        let lastPersist: "scope" | "graph" | "spans" | "draft" | null = null;
+        for await (const event of streamCrewTurn({
+          runId,
+          userId,
+          question: originalQuestion,
+          latestMessage: text,
+          prior: {
+            scope: current.scope,
+            nodes: current.nodes,
+            nodeTitles: current.nodes.map((node) => node.title),
+            nodeKeys: current.nodes.map((node) =>
+              node.id.startsWith(`${runId}_`)
+                ? node.id.slice(runId.length + 1)
+                : node.id,
+            ),
+          },
+        })) {
+          snapshot = applyCrewEvent(snapshot, event);
+          send(event);
+          await emitLogs(event);
+          if (event.type === "scope" && lastPersist !== "scope") {
+            lastPersist = "scope";
+            await persistSafe(snapshot);
+          } else if (
+            (event.type === "node" || event.type === "edge") &&
+            lastPersist !== "graph"
+          ) {
+            lastPersist = "graph";
+            await persistSafe(snapshot);
+          } else if (
+            event.type === "node" &&
+            event.node.evidenceSpanIds.length > 0 &&
+            lastPersist !== "spans"
+          ) {
+            lastPersist = "spans";
+            await persistSafe(snapshot);
+          } else if (event.type === "draft") {
+            lastPersist = "draft";
+            await persistSafe(snapshot);
+          }
+        }
+
+        snapshot = {
+          ...snapshot,
+          run: { ...snapshot.run, status: snapshot.nodes.length ? "ready" : snapshot.run.status },
+        };
+        await persistSafe(snapshot);
+      } catch (error) {
+        const aborted =
+          request.signal.aborted ||
+          /already closed|aborted/i.test(
+            error instanceof Error ? error.message : String(error),
+          );
+        if (aborted) {
+          await persistSafe({
+            ...snapshot,
+            run: {
+              ...snapshot.run,
+              status: snapshot.nodes.length ? "ready" : "failed",
+            },
+          });
+        } else {
+          const message = publicCrewError(error);
+          console.error("[polinote/messages]", message);
+          const fail = applyCrewEvent(snapshot, { type: "error", message });
+          send({ type: "error", message });
+          await persistSafe(fail);
+        }
       } finally {
-        controller.close();
+        close();
       }
     },
   });

@@ -80,6 +80,8 @@ export function Studio() {
         edges: [],
         scope: null,
         analyses: {},
+        events: [],
+        draft: null,
       });
       setModalNodeId(null);
       setDraft("");

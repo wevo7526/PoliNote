@@ -20,15 +20,15 @@ const METHODS: AllowedMethod[] = [
 ];
 
 const FIELDS: Array<{ key: keyof ScopeContract; label: string; rows?: number }> = [
-  { key: "question", label: "Question", rows: 3 },
-  { key: "instrument", label: "Instrument", rows: 2 },
-  { key: "target", label: "Target", rows: 2 },
-  { key: "identificationStrategy", label: "Identification", rows: 3 },
-  { key: "horizon", label: "Horizon" },
-  { key: "jurisdiction", label: "Jurisdiction" },
-  { key: "objective", label: "Objective", rows: 3 },
-  { key: "distributionalCut", label: "Distributional cut", rows: 2 },
-  { key: "baseline", label: "Baseline", rows: 2 },
+  { key: "objective", label: "Objective", rows: 6 },
+  { key: "instrument", label: "Instrument", rows: 6 },
+  { key: "target", label: "Target", rows: 5 },
+  { key: "identificationStrategy", label: "Identification", rows: 6 },
+  { key: "horizon", label: "Horizon", rows: 4 },
+  { key: "jurisdiction", label: "Jurisdiction", rows: 4 },
+  { key: "baseline", label: "Baseline", rows: 5 },
+  { key: "distributionalCut", label: "Distributional cut", rows: 3 },
+  { key: "question", label: "Source question", rows: 3 },
 ];
 
 function emptyScope(runId: string): ScopeContract {
@@ -88,10 +88,10 @@ export function ScopeDesk() {
         <header className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-              Scope
+              Scope contract
             </p>
             <h1 className="mt-1 font-[family-name:var(--font-display)] text-xl">
-              Contract for this run
+              Protocol for this run
             </h1>
           </div>
           <span className={`text-[11px] uppercase tracking-[0.12em] ${ready ? "text-[#8fbf9a]" : "text-[#d4b483]"}`}>

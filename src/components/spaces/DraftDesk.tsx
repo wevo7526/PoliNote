@@ -13,7 +13,7 @@ function buildBrief(title: string, question: string, nodeLines: string[]): strin
     "",
     ...nodeLines,
     "",
-    "_Every line above is grounded in a node ID. Ungrounded sentences will be flagged when the synthesizer is live._",
+    "_Every line above is grounded in a node ID._",
     "",
   ].join("\n");
 }
@@ -31,19 +31,23 @@ export function DraftDesk() {
 
   const claims = snapshot.nodes.filter((node) => node.kind === "claim" || node.kind === "incidence");
   const rest = snapshot.nodes.filter((node) => node.kind !== "claim" && node.kind !== "incidence");
-  const brief = buildBrief(
-    snapshot.run.title,
-    snapshot.scope?.question ?? "No question locked yet.",
-    (claims.length > 0 ? claims : snapshot.nodes).map(
-      (node) => `- ${node.title} \`[${node.id}]\` — ${node.body}`,
-    ),
-  );
-  const appendix = rest
-    .map((node) => {
-      const analysis = snapshot.analyses[node.id];
-      return `### ${node.kind}: ${node.title}\n\n${analysis?.body ?? node.body}\n\n\`${node.id}\``;
-    })
-    .join("\n\n");
+  const brief =
+    snapshot.draft?.brief ??
+    buildBrief(
+      snapshot.run.title,
+      snapshot.scope?.question ?? "No question locked yet.",
+      (claims.length > 0 ? claims : snapshot.nodes).map(
+        (node) => `- ${node.title} \`[${node.id}]\` — ${node.body}`,
+      ),
+    );
+  const appendix =
+    snapshot.draft?.appendix ??
+    rest
+      .map((node) => {
+        const analysis = snapshot.analyses[node.id];
+        return `### ${node.kind}: ${node.title}\n\n${analysis?.body ?? node.body}\n\n\`${node.id}\``;
+      })
+      .join("\n\n");
 
   return (
     <main className="space-page">
@@ -56,8 +60,9 @@ export function DraftDesk() {
             Brief and appendix
           </h1>
           <p className="mt-2 max-w-xl text-sm text-[var(--muted)]">
-            Assembled from surviving nodes on this run. The synthesizer will
-            later refuse sentences that do not cite a node ID.
+            {snapshot.draft
+              ? "Written by the synthesizer. Every factual line cites a node ID."
+              : "Assembled from surviving nodes until the synthesizer writes a turn."}
           </p>
         </header>
 

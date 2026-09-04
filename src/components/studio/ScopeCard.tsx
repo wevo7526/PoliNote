@@ -27,17 +27,21 @@ export function ScopeCard({ contract }: { contract: ScopeContract }) {
           {ready ? "ready" : "blocked"}
         </span>
       </div>
-      <p className="mt-3 text-sm leading-relaxed text-[var(--ink)]/90">{contract.question}</p>
-      <dl className="mt-4 space-y-2.5">
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-[var(--ink)]/90">
+        {contract.objective.trim() || contract.question}
+      </p>
+      <dl className="mt-4 space-y-3">
         {ROWS.map(({ key, label }) => {
           const value = contract[key];
-          if (typeof value !== "string") return null;
+          if (typeof value !== "string" || !value.trim()) return null;
           return (
             <div key={key}>
               <dt className="text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
                 {label}
               </dt>
-              <dd className="mt-0.5 text-[13px] leading-snug text-[var(--ink)]">{value}</dd>
+              <dd className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink)]">
+                {value}
+              </dd>
             </div>
           );
         })}

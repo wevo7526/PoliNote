@@ -1,5 +1,6 @@
+import { appendRunEvent, ensureEventsTable, listEvents } from "@/lib/db/events";
 import { asJson, queryRows, withUserDb } from "@/lib/db/user-store";
-import type { RunSnapshot, RunSummary } from "@/lib/platform-types";
+import type { RunDraft, RunSnapshot, RunSummary } from "@/lib/platform-types";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
 import type { ScopeContract } from "@/schemas/scope-contract";
@@ -55,6 +56,7 @@ export async function createRun(userId: string): Promise<RunSummary> {
       },
     );
   });
+  await appendRunEvent(userId, run.id, { type: "run.created", payload: { title: run.title } });
   return run;
 }
 
@@ -104,6 +106,15 @@ export async function getRun(
       `SELECT node_id, run_id, title, body, citations FROM analyses WHERE run_id = $id`,
       { id: runId },
     );
+    const draftRows = await queryRows<{
+      brief: string;
+      appendix: string;
+      updated_at: string;
+    }>(
+      connection,
+      `SELECT brief, appendix, updated_at FROM drafts WHERE run_id = $id`,
+      { id: runId },
+    );
 
     const analyses: Record<string, NodeAnalysis> = {};
     for (const analysis of analysisRows) {
@@ -116,7 +127,7 @@ export async function getRun(
       };
     }
 
-    return {
+    const snapshot: RunSnapshot = {
       run: {
         id: row.id,
         title: row.title,
@@ -129,7 +140,20 @@ export async function getRun(
       edges: edgeRows.map((edge) => asJson<DigressionEdge>(edge.data)),
       scope: scopeRows[0] ? asJson<ScopeContract>(scopeRows[0].data) : null,
       analyses,
+      events: [],
+      draft: draftRows[0]
+        ? {
+            brief: draftRows[0].brief,
+            appendix: draftRows[0].appendix,
+            updatedAt: draftRows[0].updated_at,
+          }
+        : null,
     };
+    return snapshot;
+  }).then(async (snapshot) => {
+    if (!snapshot) return null;
+    snapshot.events = await listEvents(userId, runId);
+    return snapshot;
   });
 }
 
@@ -158,6 +182,7 @@ export async function persistTurn(
     edges: DigressionEdge[];
     scope: ScopeContract | null;
     analyses: NodeAnalysis[];
+    draft?: RunDraft | null;
   },
 ): Promise<void> {
   const ts = nowIso();
@@ -216,7 +241,39 @@ export async function persistTurn(
         },
       );
     }
+    if (input.draft) {
+      await connection.run(
+        `INSERT OR REPLACE INTO drafts (run_id, brief, appendix, updated_at)
+         VALUES ($run_id, $brief, $appendix, $updated_at)`,
+        {
+          run_id: runId,
+          brief: input.draft.brief,
+          appendix: input.draft.appendix,
+          updated_at: input.draft.updatedAt,
+        },
+      );
+    }
   });
+}
+
+export async function deleteRun(
+  userId: string,
+  runId: string,
+): Promise<boolean> {
+  if (!(await assertRunExists(userId, runId))) return false;
+  await withUserDb(userId, async (connection) => {
+    await ensureEventsTable(connection);
+    await connection.run(`DELETE FROM messages WHERE run_id = $id`, { id: runId });
+    await connection.run(`DELETE FROM nodes WHERE run_id = $id`, { id: runId });
+    await connection.run(`DELETE FROM edges WHERE run_id = $id`, { id: runId });
+    await connection.run(`DELETE FROM analyses WHERE run_id = $id`, { id: runId });
+    await connection.run(`DELETE FROM scopes WHERE run_id = $id`, { id: runId });
+    await connection.run(`DELETE FROM drafts WHERE run_id = $id`, { id: runId });
+    await connection.run(`DELETE FROM memos WHERE run_id = $id`, { id: runId });
+    await connection.run(`DELETE FROM events WHERE run_id = $id`, { id: runId });
+    await connection.run(`DELETE FROM runs WHERE id = $id`, { id: runId });
+  });
+  return true;
 }
 
 export async function persistScope(
@@ -234,6 +291,10 @@ export async function persistScope(
       `UPDATE runs SET updated_at = $updated_at WHERE id = $id`,
       { updated_at: ts, id: runId },
     );
+  });
+  await appendRunEvent(userId, runId, {
+    type: "scope.updated",
+    payload: { contract: { ...scope, updatedAt: ts } },
   });
   return getRun(userId, runId);
 }
