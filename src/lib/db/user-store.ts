@@ -1,11 +1,47 @@
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import {
+import type {
   DuckDBConnection,
   DuckDBInstance,
-  type DuckDBValue,
+  DuckDBValue,
 } from "@duckdb/node-api";
 import { isUserId } from "@/lib/session";
+
+type DuckApi = typeof import("@duckdb/node-api");
+
+const LINUX_BINDINGS = [
+  "node-bindings-linux-x64",
+  "node-bindings-linux-x64-musl",
+  "node-bindings-linux-arm64",
+  "node-bindings-linux-arm64-musl",
+];
+
+function pinDuckdbLibraryPath(): void {
+  if (process.platform !== "linux") return;
+  const roots = [process.cwd(), path.join(process.cwd(), ".next", "server")];
+  for (const root of roots) {
+    for (const name of LINUX_BINDINGS) {
+      const dir = path.join(root, "node_modules", "@duckdb", name);
+      if (!existsSync(dir)) continue;
+      const current = process.env.LD_LIBRARY_PATH ?? "";
+      if (!current.split(":").includes(dir)) {
+        process.env.LD_LIBRARY_PATH = current ? `${dir}:${current}` : dir;
+      }
+      return;
+    }
+  }
+}
+
+let duckApi: Promise<DuckApi> | null = null;
+
+function loadDuckdb(): Promise<DuckApi> {
+  if (!duckApi) {
+    pinDuckdbLibraryPath();
+    duckApi = import("@duckdb/node-api");
+  }
+  return duckApi;
+}
 
 type UserDb = {
   instance: DuckDBInstance;
@@ -135,6 +171,7 @@ async function openUserDb(userId: string): Promise<UserDb> {
   const opening = (async () => {
     await mkdir(usersDir(), { recursive: true });
     const filePath = userDbPath(userId);
+    const { DuckDBInstance } = await loadDuckdb();
     const instance = await DuckDBInstance.fromCache(filePath);
     const existing = cache.dbs.get(userId);
     if (existing) return existing;
