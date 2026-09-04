@@ -1,58 +1,55 @@
 "use client";
 
 import type { RefObject } from "react";
-import { ScopeCard } from "./ScopeCard";
-import { NodeCard } from "./NodeCard";
+import { ResponseCard } from "./ResponseCard";
 import type { ThreadItem } from "./thread-types";
+import { groupThreadTurns } from "@/lib/ui/thread-turns";
+import type { RunEvent } from "@/schemas/run-event";
 
 type ThreadProps = {
   items: ThreadItem[];
+  events?: RunEvent[];
   onOpenNode: (id: string) => void;
   listRef: RefObject<HTMLDivElement | null>;
 };
 
-export function Thread({ items, onOpenNode, listRef }: ThreadProps) {
+export function Thread({
+  items,
+  events = [],
+  onOpenNode,
+  listRef,
+}: ThreadProps) {
+  const turns = groupThreadTurns(items, events);
+
   return (
     <div
       ref={listRef}
       className="thread-scroll min-h-0 flex-1 overflow-y-auto"
       aria-live="polite"
     >
-      <div className="flex flex-col gap-4 px-5 py-5">
-        {items.map((item) => {
-          if (item.kind === "user") {
-            return (
-              <div key={item.id} className="flex justify-end">
-                <p className="user-bubble max-w-[92%] text-[15px] leading-relaxed">{item.text}</p>
-              </div>
-            );
-          }
-          if (item.kind === "narration") {
-            return (
-              <div key={item.id} className="narration-box">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-                  {item.agent}
-                </p>
-                <p className="mt-1.5 whitespace-pre-wrap text-[15px] leading-[1.65] text-[var(--ink)]/92">
-                  {item.text}
-                </p>
-              </div>
-            );
-          }
-          if (item.kind === "status") {
-            return (
-              <p
-                key={item.id}
-                className="status-box text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]"
-              >
-                {item.text}
-              </p>
-            );
-          }
-          if (item.kind === "scope") {
-            return <ScopeCard key={item.id} contract={item.contract} />;
-          }
-          return <NodeCard key={item.id} node={item.node} onOpen={onOpenNode} />;
+      <div className="flex flex-col gap-5 px-5 py-5">
+        {turns.map((turn) => {
+          const hasResponse =
+            turn.items.length > 0 || turn.events.length > 0;
+          return (
+            <div key={turn.id} className="thread-turn">
+              {turn.user ? (
+                <div className="flex justify-end">
+                  <p className="user-bubble max-w-[92%] text-[15px] leading-relaxed">
+                    {turn.user.text}
+                  </p>
+                </div>
+              ) : null}
+              {hasResponse ? (
+                <ResponseCard
+                  items={turn.items}
+                  events={turn.events}
+                  finished={turn.finished}
+                  onOpenNode={onOpenNode}
+                />
+              ) : null}
+            </div>
+          );
         })}
       </div>
     </div>

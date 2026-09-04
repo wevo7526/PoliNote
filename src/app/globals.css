@@ -444,6 +444,260 @@ body {
   margin-bottom: 0.35rem;
 }
 
+.analysis-visual {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.analysis-visual a {
+  color: var(--copper);
+  text-underline-offset: 2px;
+}
+
+.analysis-visual a:hover {
+  text-decoration: underline;
+}
+
+.analysis-visual code {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.86em;
+  color: var(--copper);
+}
+
+.viz-section {
+  border: 1px solid var(--line);
+  background: rgba(243, 238, 228, 0.03);
+  padding: 0.75rem 0.85rem 0.85rem;
+}
+
+.viz-section.tone-mechanism {
+  border-left: 2px solid #8fbfb0;
+}
+
+.viz-section.tone-incidence {
+  border-left: 2px solid #d4a08c;
+}
+
+.viz-section.tone-identification {
+  border-left: 2px solid #9bb4d4;
+}
+
+.viz-section.tone-signflip {
+  border-left: 2px solid #d48ca0;
+}
+
+.viz-section.tone-missing {
+  border-left: 2px solid #a8a29a;
+}
+
+.viz-section.tone-claims,
+.viz-section.tone-scope {
+  border-left: 2px solid var(--copper);
+}
+
+.viz-kicker {
+  margin: 0 0 0.45rem;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--copper);
+}
+
+.viz-section-body .analysis-p:last-child,
+.viz-section-body .viz-list:last-child {
+  margin-bottom: 0;
+}
+
+.viz-list {
+  margin: 0 0 0.7rem;
+  padding: 0;
+  list-style: none;
+}
+
+.viz-list li {
+  position: relative;
+  margin-bottom: 0.4rem;
+  padding: 0.45rem 0.65rem 0.45rem 0.8rem;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.viz-list li:last-child {
+  margin-bottom: 0;
+}
+
+.thread-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.response-card {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  padding: 1rem 1.05rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.response-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.response-agent {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--copper);
+}
+
+.response-role,
+.response-agent-mini {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.response-agent-mini {
+  margin-bottom: 0.35rem;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--copper);
+}
+
+.response-working,
+.response-notice {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.response-working {
+  color: var(--copper);
+}
+
+.response-mcp,
+.response-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.response-actions-label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.response-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.response-node-btn,
+.mcp-chip {
+  border: 1px solid var(--line);
+  background: var(--paper-strong);
+  padding: 0.3rem 0.55rem;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--ink);
+}
+
+.response-node-btn:hover {
+  border-color: rgba(212, 180, 131, 0.45);
+  color: var(--copper);
+}
+
+.mcp-chip.is-ok {
+  border-color: rgba(143, 191, 176, 0.4);
+  color: #8fbfb0;
+}
+
+.mcp-chip.is-fail {
+  border-color: rgba(212, 140, 160, 0.4);
+  color: #d48ca0;
+}
+
+.event-log {
+  border-top: 1px solid var(--line);
+  padding-top: 0.55rem;
+}
+
+.event-log-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--copper);
+}
+
+.event-log-summary::-webkit-details-marker {
+  display: none;
+}
+
+.event-log-count {
+  color: var(--muted);
+}
+
+.event-log-list {
+  margin: 0.7rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.event-log-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: rgba(11, 12, 15, 0.35);
+  padding: 0.5rem 0.65rem;
+}
+
+.event-log-row.is-action:hover {
+  border-color: rgba(212, 180, 131, 0.4);
+}
+
+.event-log-label {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.event-log-meta {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 @media (max-width: 1100px) {
   .run-stage {
     grid-template-columns: 1fr;

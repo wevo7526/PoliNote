@@ -778,7 +778,8 @@ export async function* streamCrewTurn(input: {
     fallback: "Locking a working scope so the rest of the crew can place nodes.",
     system: `You are PoliNote's scoper. Write 3–5 short paragraphs for a researcher.
 Name the instrument, target, identification strategy, horizon, jurisdiction, and baseline in the long-form protocol style.
-Say what is still missing. No JSON. Use blank lines between paragraphs.`,
+Say what is still missing. No JSON. No markdown: no # headings, no **bold**, no lists with dashes.
+Use blank lines between paragraphs. You may put a plain label on its own line (Instrument, Target, Identification, Horizon).`,
     prompt: context,
   });
 
@@ -914,7 +915,8 @@ The graph must be cohesive: every node attaches to the instrument → target →
       fallback: "The skeleton is on the map. Filling mechanism, incidence, and missing-evidence notes.",
       system: `You are PoliNote's literature / mechanism / incidence crew.
 Write 3–5 short paragraphs about the nodes that were JUST placed. Name them by title.
-Stay on this instrument and this identification strategy. No JSON. Blank lines between paragraphs.`,
+Stay on this instrument and this identification strategy. No JSON. No markdown: no # headings, no **bold**.
+Blank lines between paragraphs. You may use plain labels on their own line: Mechanism, Incidence, Identification.`,
       prompt: JSON.stringify({
         question: input.question,
         scope: scopeOut.scope,
@@ -970,7 +972,9 @@ Stay on this instrument and this identification strategy. No JSON. Blank lines b
     fallback: "Identification and incidence still need harder evidence before any node is supported.",
     system: `You are PoliNote's critic. Write 3–5 short paragraphs.
 Attack identification, omitted channels, incidence hiding, and any claim that still lacks an MCP span.
-You may not add positive claims or mark nodes supported. Name nodes by title. No JSON. Blank lines between paragraphs.`,
+You may not add positive claims or mark nodes supported. Name nodes by title.
+No JSON. No markdown: no # headings, no **bold**. Blank lines between paragraphs.
+You may use plain labels on their own line: Identification, Sign flip, Missing evidence.`,
     prompt: JSON.stringify({
       question: input.question,
       scope: scopeOut.scope,

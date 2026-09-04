@@ -1,6 +1,7 @@
 "use client";
 
 import { NeedRun } from "@/components/app/NeedRun";
+import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
 
 function buildBrief(title: string, question: string, nodeLines: string[]): string {
@@ -71,15 +72,18 @@ export function DraftDesk() {
             <h2 className="text-[10px] uppercase tracking-[0.14em] text-[var(--copper)]">
               Public brief
             </h2>
-            <pre className="draft-pre">{brief}</pre>
+            <AnalysisBody text={brief} />
           </article>
           <article className="draft-col">
             <h2 className="text-[10px] uppercase tracking-[0.14em] text-[var(--copper)]">
               Technical appendix
             </h2>
-            <pre className="draft-pre">
-              {appendix || "Appendix fills as mechanisms, constraints, and forks appear."}
-            </pre>
+            <AnalysisBody
+              text={
+                appendix ||
+                "Appendix fills as mechanisms, constraints, and forks appear."
+              }
+            />
           </article>
         </div>
       </section>

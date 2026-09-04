@@ -18,14 +18,24 @@ function formatTime(iso: string): string {
   });
 }
 
+function mcpCount(events: RunEvent[]): number {
+  return events.filter(
+    (event) => event.type === "mcp.tool_call" || event.type === "mcp.tool_result",
+  ).length;
+}
+
 export function EventLog({ events, onOpenNode }: EventLogProps) {
   if (events.length === 0) return null;
+  const tools = mcpCount(events);
 
   return (
     <details className="event-log">
       <summary className="event-log-summary">
-        <span>Event log</span>
-        <span className="event-log-count">{events.length}</span>
+        <span>Run record</span>
+        <span className="event-log-count">
+          {events.length}
+          {tools > 0 ? ` · ${tools} MCP` : ""}
+        </span>
       </summary>
       <ol className="event-log-list">
         {events.map((event) => {

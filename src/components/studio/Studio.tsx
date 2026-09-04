@@ -170,6 +170,7 @@ export function Studio() {
             ) : (
               <Thread
                 items={snapshot?.items ?? []}
+                events={snapshot?.events ?? []}
                 onOpenNode={setModalNodeId}
                 listRef={listRef}
               />

@@ -1,72 +1,66 @@
 import type { ReactNode } from "react";
+import {
+  parseProse,
+  type ProseBlock,
+  type ProseInline,
+  type ProseSection,
+} from "@/lib/ui/prose";
 
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
-  return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) => {
-    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
-      return <strong key={`${keyPrefix}-${index}`}>{part.slice(2, -2)}</strong>;
+function renderInline(parts: ProseInline[], keyPrefix: string): ReactNode[] {
+  return parts.map((part, index) => {
+    const key = `${keyPrefix}-${index}`;
+    if (part.kind === "strong") return <strong key={key}>{part.text}</strong>;
+    if (part.kind === "em") return <em key={key}>{part.text}</em>;
+    if (part.kind === "code") return <code key={key}>{part.text}</code>;
+    if (part.kind === "link") {
+      return (
+        <a key={key} href={part.href} target="_blank" rel="noreferrer">
+          {part.text}
+        </a>
+      );
     }
-    return part;
+    return <span key={key}>{part.text}</span>;
   });
 }
 
-export function AnalysisBody({ text }: { text: string }) {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  const blocks: ReactNode[] = [];
-  let paragraph: string[] = [];
-  let list: string[] = [];
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return;
-    const content = paragraph.join(" ");
-    blocks.push(
-      <p key={`p-${blocks.length}`} className="analysis-p">
-        {renderInline(content, `p-${blocks.length}`)}
-      </p>,
-    );
-    paragraph = [];
-  };
-
-  const flushList = () => {
-    if (list.length === 0) return;
-    blocks.push(
-      <ul key={`ul-${blocks.length}`} className="analysis-list">
-        {list.map((item, index) => (
-          <li key={index}>{renderInline(item, `li-${blocks.length}-${index}`)}</li>
-        ))}
-      </ul>,
-    );
-    list = [];
-  };
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) {
-      flushList();
-      flushParagraph();
-      continue;
-    }
-    const heading = line.match(/^#{1,3}\s+(.+)$/);
-    if (heading) {
-      flushList();
-      flushParagraph();
-      blocks.push(
-        <h3 key={`h-${blocks.length}`} className="analysis-h">
-          {heading[1]}
-        </h3>,
-      );
-      continue;
-    }
-    const bullet = line.match(/^[-*]\s+(.+)$/);
-    if (bullet) {
-      flushParagraph();
-      list.push(bullet[1]);
-      continue;
-    }
-    flushList();
-    paragraph.push(line);
+function BlockView({ block, id }: { block: ProseBlock; id: string }) {
+  if (block.kind === "p") {
+    return <p className="analysis-p">{renderInline(block.parts, id)}</p>;
   }
-  flushList();
-  flushParagraph();
+  const List = block.kind === "ol" ? "ol" : "ul";
+  return (
+    <List className="viz-list">
+      {block.items.map((item, index) => (
+        <li key={`${id}-${index}`}>{renderInline(item, `${id}-${index}`)}</li>
+      ))}
+    </List>
+  );
+}
 
-  return <div className="analysis-prose">{blocks}</div>;
+function SectionView({ section, index }: { section: ProseSection; index: number }) {
+  const body = section.blocks.map((block, blockIndex) => (
+    <BlockView key={`${index}-${blockIndex}`} block={block} id={`${index}-${blockIndex}`} />
+  ));
+
+  if (!section.title) {
+    return <div className="analysis-prose">{body}</div>;
+  }
+
+  return (
+    <section className={`viz-section tone-${section.tone}`}>
+      <p className="viz-kicker">{section.title}</p>
+      <div className="viz-section-body">{body}</div>
+    </section>
+  );
+}
+
+export function AnalysisBody({ text }: { text: string }) {
+  const sections = parseProse(text);
+  return (
+    <div className="analysis-visual">
+      {sections.map((section, index) => (
+        <SectionView key={`${section.title ?? "body"}-${index}`} section={section} index={index} />
+      ))}
+    </div>
+  );
 }

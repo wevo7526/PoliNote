@@ -13,13 +13,16 @@ export function RunDesk() {
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const threadTick = snapshot?.items
-    .map((item) =>
-      item.kind === "narration" || item.kind === "status"
-        ? `${item.id}:${item.text.length}`
-        : item.id,
-    )
-    .join("|");
+  const threadTick = [
+    snapshot?.items
+      .map((item) =>
+        item.kind === "narration" || item.kind === "status"
+          ? `${item.id}:${item.text.length}`
+          : item.id,
+      )
+      .join("|"),
+    snapshot?.events?.length ?? 0,
+  ].join(":");
 
   useEffect(() => {
     const el = listRef.current;
@@ -93,6 +96,7 @@ export function RunDesk() {
           ) : (
             <Thread
               items={snapshot?.items ?? []}
+              events={snapshot?.events ?? []}
               onOpenNode={setModalNodeId}
               listRef={listRef}
             />
