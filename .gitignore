@@ -30,11 +30,12 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
+# env / secrets
 .env
+.env.*
 .env.local
 .env.*.local
-!.env.example
+.env.example
 
 # vercel
 .vercel
@@ -43,5 +44,26 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# per-user DuckDB (never commit)
+# per-user DuckDB
 /data
+
+# Public repo: do not publish the clone-and-build surface
+package.json
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+bun.lockb
+tsconfig.json
+tsconfig.*.json
+jsconfig.json
+next.config.*
+eslint.config.*
+.postcss.config.*
+postcss.config.*
+drizzle.config.*
+/drizzle
+*.config.ts
+*.config.mjs
+*.config.js
+*.config.cjs

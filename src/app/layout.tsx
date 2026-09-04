@@ -15,7 +15,11 @@ const sans = Source_Sans_3({
 export const metadata: Metadata = {
   title: "PoliNote",
   description:
-    "Ask a policy question. Watch the argument grow — scope, evidence, and forks in one thread.",
+    "A workbench for economic policy digression — scope, evidence, and forks.",
+  icons: {
+    icon: [{ url: "/icon.png", type: "image/png" }],
+    apple: [{ url: "/icon.png" }],
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -13,6 +13,25 @@ type UserDb = {
   queue: Promise<unknown>;
 };
 
+type DuckCache = {
+  dbs: Map<string, UserDb>;
+  opening: Map<string, Promise<UserDb>>;
+};
+
+const globalForDuck = globalThis as typeof globalThis & {
+  __polinoteDuck?: DuckCache;
+};
+
+function duckCache(): DuckCache {
+  if (!globalForDuck.__polinoteDuck) {
+    globalForDuck.__polinoteDuck = {
+      dbs: new Map(),
+      opening: new Map(),
+    };
+  }
+  return globalForDuck.__polinoteDuck;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
   id VARCHAR PRIMARY KEY,
@@ -52,8 +71,6 @@ CREATE TABLE IF NOT EXISTS analyses (
 );
 `;
 
-const cache = new Map<string, UserDb>();
-
 function usersDir(): string {
   return path.join(process.cwd(), "data", "users");
 }
@@ -66,16 +83,31 @@ export function userDbPath(userId: string): string {
 }
 
 async function openUserDb(userId: string): Promise<UserDb> {
-  const hit = cache.get(userId);
+  const cache = duckCache();
+  const hit = cache.dbs.get(userId);
   if (hit) return hit;
 
-  await mkdir(usersDir(), { recursive: true });
-  const instance = await DuckDBInstance.create(userDbPath(userId));
-  const connection = await instance.connect();
-  await connection.run(SCHEMA);
-  const db: UserDb = { instance, connection, queue: Promise.resolve() };
-  cache.set(userId, db);
-  return db;
+  const inflight = cache.opening.get(userId);
+  if (inflight) return inflight;
+
+  const opening = (async () => {
+    await mkdir(usersDir(), { recursive: true });
+    const filePath = userDbPath(userId);
+    const instance = await DuckDBInstance.fromCache(filePath);
+    const existing = cache.dbs.get(userId);
+    if (existing) return existing;
+
+    const connection = await instance.connect();
+    await connection.run(SCHEMA);
+    const db: UserDb = { instance, connection, queue: Promise.resolve() };
+    cache.dbs.set(userId, db);
+    return db;
+  })().finally(() => {
+    cache.opening.delete(userId);
+  });
+
+  cache.opening.set(userId, opening);
+  return opening;
 }
 
 export async function withUserDb<T>(
