@@ -105,8 +105,8 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-const DEFAULT_MODEL = "gpt-6-astra";
-const FALLBACK_MODELS = ["gpt-5.6", "gpt-4.1"];
+const DEFAULT_MODEL = "gpt-5.6-sol";
+const FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-4.1"];
 
 const MODEL_OPTIONS = {
   openai: { reasoningEffort: "high" as const },
