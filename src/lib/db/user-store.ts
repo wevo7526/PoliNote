@@ -72,7 +72,11 @@ CREATE TABLE IF NOT EXISTS analyses (
 `;
 
 function usersDir(): string {
-  return path.join(process.cwd(), "data", "users");
+  const root =
+    process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
+      ? path.join("/tmp", "polinote")
+      : process.cwd();
+  return path.join(root, "data", "users");
 }
 
 export function userDbPath(userId: string): string {

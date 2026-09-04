@@ -47,23 +47,7 @@ next-env.d.ts
 # per-user DuckDB
 /data
 
-# Public repo: do not publish the clone-and-build surface
-package.json
-package-lock.json
-pnpm-lock.yaml
-yarn.lock
-bun.lock
-bun.lockb
-tsconfig.json
-tsconfig.*.json
-jsconfig.json
-next.config.*
+# Local-only tooling (not required for the Vercel build)
 eslint.config.*
-.postcss.config.*
-postcss.config.*
 drizzle.config.*
 /drizzle
-*.config.ts
-*.config.mjs
-*.config.js
-*.config.cjs
