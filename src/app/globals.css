@@ -268,12 +268,11 @@ body {
 }
 
 .graph-node {
-  opacity: 0;
-  animation: graph-node-in 280ms ease forwards;
+  transition: opacity 150ms ease;
 }
 
 .graph-node.is-arriving {
-  animation: graph-node-arrive 1.2s ease forwards;
+  animation: graph-node-arrive 600ms ease;
 }
 
 .graph-node.is-pruned {
@@ -282,8 +281,7 @@ body {
 }
 
 .graph-edge {
-  opacity: 0;
-  animation: graph-edge-in 360ms ease forwards;
+  transition: opacity 150ms ease;
 }
 
 .graph-lane-label {

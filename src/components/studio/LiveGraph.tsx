@@ -384,43 +384,57 @@ export function LiveGraph({
         </div>
       ) : null}
 
-      {/* Live Hover / Selection Explainer Strip */}
-      {focusNode ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] bg-[#111319] px-4 py-2 text-xs">
-          <div className="flex min-w-0 items-center gap-2">
-            <span
-              className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-              style={{ backgroundColor: NODE_KIND_TAXONOMY[focusNode.kind].color }}
-            />
-            <span
-              className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em]"
-              style={{ color: NODE_KIND_TAXONOMY[focusNode.kind].color }}
-            >
-              {NODE_KIND_TAXONOMY[focusNode.kind].label}:
+      {/* Fixed-Height Explainer Strip (never mounts/unmounts on hover, preventing SVG layout shift) */}
+      <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-[var(--line)] bg-[#111319] px-4 text-xs">
+        {focusNode ? (
+          <>
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: NODE_KIND_TAXONOMY[focusNode.kind].color }}
+              />
+              <span
+                className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em]"
+                style={{ color: NODE_KIND_TAXONOMY[focusNode.kind].color }}
+              >
+                {NODE_KIND_TAXONOMY[focusNode.kind].label}:
+              </span>
+              <span className="truncate font-medium text-[var(--ink)]">
+                {focusNode.title}
+              </span>
+              <span className="hidden truncate text-[11px] text-[var(--muted)] xl:inline">
+                — {NODE_KIND_TAXONOMY[focusNode.kind].whatItDoes}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 text-[11px]">
+              <span className="text-[var(--muted)]">
+                Created by{" "}
+                <strong className="text-[var(--ink)]">
+                  {humanAgent(focusNode.agent)}
+                </strong>
+              </span>
+              <span
+                className="px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]"
+                style={{
+                  backgroundColor: NODE_STATUS_TAXONOMY[focusNode.status].bgColor,
+                  color: NODE_STATUS_TAXONOMY[focusNode.status].color,
+                }}
+              >
+                {NODE_STATUS_TAXONOMY[focusNode.status].shortLabel}
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="truncate text-[11px] text-[var(--muted)]">
+              Hover any node to highlight its connected chain · Click any node to inspect how it was made
             </span>
-            <span className="truncate font-medium text-[var(--ink)]">
-              {focusNode.title}
+            <span className="hidden shrink-0 text-[10px] uppercase tracking-[0.12em] text-[var(--copper)] sm:inline">
+              5 Spine Stages + Digression Branches
             </span>
-            <span className="hidden truncate text-[11px] text-[var(--muted)] xl:inline">
-              — {NODE_KIND_TAXONOMY[focusNode.kind].whatItDoes}
-            </span>
-          </div>
-          <div className="flex shrink-0 items-center gap-2 text-[11px]">
-            <span className="text-[var(--muted)]">
-              Created by <strong className="text-[var(--ink)]">{humanAgent(focusNode.agent)}</strong>
-            </span>
-            <span
-              className="px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]"
-              style={{
-                backgroundColor: NODE_STATUS_TAXONOMY[focusNode.status].bgColor,
-                color: NODE_STATUS_TAXONOMY[focusNode.status].color,
-              }}
-            >
-              {NODE_STATUS_TAXONOMY[focusNode.status].shortLabel}
-            </span>
-          </div>
-        </div>
-      ) : null}
+          </>
+        )}
+      </div>
 
       <div className="relative min-h-0 w-full flex-1 overflow-auto">
         <svg
@@ -590,7 +604,10 @@ export function LiveGraph({
               <g
                 key={edge.id}
                 className="graph-edge"
-                opacity={quiet ? 0.2 : dimmed ? 0.22 : 1}
+                style={{
+                  opacity: quiet ? 0.2 : dimmed ? 0.22 : 1,
+                  pointerEvents: "none",
+                }}
               >
                 <path
                   d={geom.d}
@@ -650,8 +667,10 @@ export function LiveGraph({
                   cursor: clickable ? "pointer" : "default",
                   opacity: pruned ? 0.38 : dimmed ? 0.28 : 1,
                 }}
-                onMouseEnter={() => setHoveredId(node.id)}
-                onMouseLeave={() => setHoveredId(null)}
+                onPointerEnter={() => setHoveredId(node.id)}
+                onPointerLeave={() =>
+                  setHoveredId((prev) => (prev === node.id ? null : prev))
+                }
                 onClick={() => onOpenNode?.(node.id)}
                 onKeyDown={(event) => {
                   if (!onOpenNode) return;
@@ -680,6 +699,7 @@ export function LiveGraph({
                   height={NODE_H}
                   rx={1.5}
                   fill={fill}
+                  pointerEvents="none"
                 />
 
                 {/* Top header: Plain-English Node Type + Plain-English Verification Status */}
@@ -688,6 +708,7 @@ export function LiveGraph({
                   cy={node.position.y + 16}
                   r={3.5}
                   fill={fill}
+                  pointerEvents="none"
                 />
                 <text
                   x={node.position.x + 23}
@@ -696,6 +717,7 @@ export function LiveGraph({
                   fontSize={9.5}
                   fontWeight={600}
                   letterSpacing={0.8}
+                  pointerEvents="none"
                 >
                   {kindInfo.shortLabel}
                 </text>
@@ -707,6 +729,7 @@ export function LiveGraph({
                   height={16}
                   rx={2}
                   fill={statusInfo.bgColor}
+                  pointerEvents="none"
                 />
                 <text
                   x={node.position.x + NODE_W - statusW / 2 - 8}
@@ -715,6 +738,7 @@ export function LiveGraph({
                   fill={statusInfo.color}
                   fontSize={8.5}
                   fontWeight={600}
+                  pointerEvents="none"
                 >
                   {statusText}
                 </text>
@@ -726,6 +750,7 @@ export function LiveGraph({
                   fill="#f3eee4"
                   fontSize={12.5}
                   fontWeight={500}
+                  pointerEvents="none"
                 >
                   {line1}
                 </text>
@@ -736,6 +761,7 @@ export function LiveGraph({
                     fill="#f3eee4"
                     fontSize={12.5}
                     fontWeight={500}
+                    pointerEvents="none"
                   >
                     {line2}
                   </text>
@@ -745,6 +771,7 @@ export function LiveGraph({
                     y={node.position.y + 56}
                     fill="#9a9284"
                     fontSize={10.5}
+                    pointerEvents="none"
                   >
                     {node.body.length > 36
                       ? `${node.body.slice(0, 36).trim()}…`
@@ -760,12 +787,14 @@ export function LiveGraph({
                   y2={node.position.y + 66}
                   stroke="rgba(243,238,228,0.08)"
                   strokeWidth={1}
+                  pointerEvents="none"
                 />
                 <text
                   x={node.position.x + 14}
                   y={node.position.y + 79}
                   fill="#9a9284"
                   fontSize={9}
+                  pointerEvents="none"
                 >
                   By {roleLabel}
                 </text>
@@ -776,6 +805,7 @@ export function LiveGraph({
                   fill={spanCount > 0 ? "#8fbf9a" : "#9a9284"}
                   fontSize={9}
                   fontWeight={spanCount > 0 ? 600 : 400}
+                  pointerEvents="none"
                 >
                   {spanCount > 0
                     ? `✓ ${spanCount} Empirical Source${spanCount === 1 ? "" : "s"}`
