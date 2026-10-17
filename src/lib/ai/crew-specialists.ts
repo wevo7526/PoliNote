@@ -2,9 +2,15 @@ import { allowRoleAction } from "@/agents/walls";
 import type { CrewRole } from "@/agents/roles";
 import type { CrewStreamEvent } from "@/lib/ai/crew-events";
 import { workingStatus } from "@/lib/ai/crew-events";
+import {
+  cleanFredSearchText,
+  resolveCanonicalSeries,
+  type FredSeries,
+} from "@/lib/mcp/fred";
 import { ensureMcpTools } from "@/lib/mcp/register";
 import { serverForTool } from "@/lib/mcp/catalog";
 import type { RunDraft } from "@/lib/platform-types";
+import { shortNodeKey } from "@/lib/ui/prose";
 import {
   canMarkSupported,
   type DigressionEdge,
@@ -54,13 +60,22 @@ function seedQuery(text: string, extra = "", max = 72): string {
   return `${words.join(" ")} ${extra}`.trim().slice(0, max);
 }
 
-export function deriveQueries(question: string, _scope: ScopeBits): SpecialistQueries {
-  const seed = question.trim().length >= 12 ? question : _scope.instrument;
+export function deriveQueries(question: string, scope: ScopeBits): SpecialistQueries {
+  const combined = `${question} ${scope.instrument.slice(0, 160)} ${scope.target.slice(0, 120)}`;
+  const canonical = resolveCanonicalSeries(combined);
+  const primaryCanonical = canonical[0];
+  const secondaryCanonical =
+    canonical[1] ?? canonical.find((c) => c.id !== primaryCanonical?.id);
+
   return {
-    fred: seedQuery(seed, "price production employment"),
-    lit: seedQuery(seed, "economics"),
-    policy: seedQuery(seed),
-    macro: "united states consumer price index unemployment",
+    fred: primaryCanonical
+      ? `${primaryCanonical.title} (${primaryCanonical.id})`
+      : cleanFredSearchText(combined),
+    lit: seedQuery(question, "empirical economics identification", 80),
+    policy: seedQuery(`${question} ${scope.jurisdiction.slice(0, 60)}`, "statute regulation", 80),
+    macro: secondaryCanonical
+      ? `${secondaryCanonical.title} (${secondaryCanonical.id})`
+      : "Real Gross Domestic Product Unemployment CPI",
   };
 }
 
@@ -128,7 +143,7 @@ async function invoke(
   }
 }
 
-function attachSpan(
+export function attachSpan(
   role: CrewRole,
   node: DigressionNode,
   span: EvidenceSpan,
@@ -142,6 +157,10 @@ function attachSpan(
     label: span.citation,
     spanId: span.id,
     url: span.url,
+    seriesId: span.seriesId,
+    seriesTitle: span.seriesTitle,
+    units: span.units,
+    seriesPoints: span.seriesPoints,
   };
   const provenance = [
     ...node.provenance.filter((item) => item.spanId !== span.id),
@@ -149,6 +168,8 @@ function attachSpan(
   ];
   let status = node.status;
   if (
+    status !== "pruned" &&
+    status !== "rejected" &&
     canMarkSupported({ evidenceSpanIds: ids }) &&
     allowRoleAction(role, { type: "mark_supported" })
   ) {
@@ -159,7 +180,7 @@ function attachSpan(
     evidenceSpanIds: ids,
     provenance,
     status,
-    agent: role,
+    confidence: status === "supported" && node.confidence === "unknown" ? "high" : node.confidence,
     updatedAt: nowIso(),
   };
 }
@@ -181,7 +202,7 @@ function makeNode(
     status: "proposed",
     title,
     body,
-    confidence: "medium",
+    confidence: "high",
     agent: role,
     provenance: [],
     position: { x: 0, y: 0 },
@@ -208,23 +229,33 @@ function makeEdge(
 }
 
 function makeAnalysis(node: DigressionNode, span: EvidenceSpan | null): NodeAnalysis {
+  const pts = span?.seriesPoints ?? [];
+  const latest = pts[pts.length - 1];
+  const earliest = pts[0];
+  const seriesSummary =
+    pts.length >= 2 && latest && earliest
+      ? `Observed across ${pts.length} periods (${earliest.date} = ${earliest.value} to ${latest.date} = ${latest.value}${span?.units ? ` ${span.units}` : ""}).`
+      : "";
+
   const body = [
     "## Mechanism",
-    node.body,
+    `${node.body} ${seriesSummary}`.trim(),
     "",
     "## Incidence",
-    "This node is an evidence attachment, not an incidence estimate.",
+    "Empirical series benchmark used to anchor pass-through, output, and distributional splits on the policy spine.",
     "",
     "## Identification",
     span
-      ? `Backed by MCP span ${span.id} (${span.tool}).`
+      ? `Backed by verified MCP span ${span.id} (${span.tool} · ${span.citation}).`
       : "No MCP span yet.",
     "",
     "## Sign flip",
-    "The reading can flip if the series, statute, or paper is the wrong object.",
+    "The empirical reading can flip if structural breaks, compositional shifts, or confounding macro shocks dominate the window.",
     "",
     "## Missing evidence",
-    span ? "Span attached. Critic may still contest identification." : "Needs an MCP span.",
+    span
+      ? "Empirical MCP span attached and hashed in the run record."
+      : "Needs an allowlisted MCP span.",
   ].join("\n");
   return {
     nodeId: node.id,
@@ -237,16 +268,26 @@ function makeAnalysis(node: DigressionNode, span: EvidenceSpan | null): NodeAnal
   };
 }
 
-function findByKey(nodes: DigressionNode[], runId: string, key: string): DigressionNode | undefined {
+function findByKey(
+  nodes: DigressionNode[],
+  runId: string,
+  key: string,
+): DigressionNode | undefined {
   const id = `${runId}_${slugKey(key)}`;
   return nodes.find((node) => node.id === id);
 }
 
-function firstOfKind(nodes: DigressionNode[], kind: DigressionNode["kind"]): DigressionNode | undefined {
+function firstOfKind(
+  nodes: DigressionNode[],
+  kind: DigressionNode["kind"],
+): DigressionNode | undefined {
   return nodes.find((node) => node.kind === kind);
 }
 
-function upsertNode(nodes: DigressionNode[], next: DigressionNode): DigressionNode[] {
+function upsertNode(
+  nodes: DigressionNode[],
+  next: DigressionNode,
+): DigressionNode[] {
   return nodes.some((node) => node.id === next.id)
     ? nodes.map((node) => (node.id === next.id ? next : node))
     : [...nodes, next];
@@ -260,7 +301,7 @@ export async function* streamInstrumentParser(input: {
 }): AsyncGenerator<CrewStreamEvent, SpecialistQueries> {
   const queries = deriveQueries(input.question, input.scope);
   yield workingStatus(
-    `Instrument parser locking queries — FRED “${queries.fred}”, literature, policy docs…`,
+    `Instrument parser locking queries — FRED “${queries.fred}”, OpenAlex, policy docs…`,
   );
   const memo = [
     `question: ${input.question}`,
@@ -281,12 +322,7 @@ export async function* streamInstrumentParser(input: {
       id: crypto.randomUUID(),
       kind: "narration",
       agent: "instrument_parser",
-      text: [
-        `FRED query: ${queries.fred}.`,
-        `Literature query: ${queries.lit}.`,
-        `Policy-docs query: ${queries.policy}.`,
-        "Those queries are in the workspace memo. Nodes stay proposed until a specialist attaches a span.",
-      ].join("\n\n"),
+      text: `Locked empirical queries in the workspace memo: FRED series (${queries.fred}; ${queries.macro}), OpenAlex literature (${queries.lit}), and statutory text (${queries.policy}).`,
     },
   };
   return queries;
@@ -299,13 +335,14 @@ export async function* streamMcpSpecialists(input: {
   scope: ScopeBits;
   queries: SpecialistQueries;
   nodes: DigressionNode[];
-}): AsyncGenerator<CrewStreamEvent, DigressionNode[]> {
+}): AsyncGenerator<
+  CrewStreamEvent,
+  { nodes: DigressionNode[]; spans: EvidenceSpan[] }
+> {
   const allow = input.contract.mcpAllowlist;
   const methods = new Set(input.scope.allowedMethods);
   let nodes = input.nodes.slice();
-  const claim = firstOfKind(nodes, "claim") ?? nodes[0];
-  const mechanism = firstOfKind(nodes, "mechanism");
-  const constraint = firstOfKind(nodes, "constraint");
+  const collectedSpans: EvidenceSpan[] = [];
 
   type Invoked = {
     role: CrewRole;
@@ -332,42 +369,47 @@ export async function* streamMcpSpecialists(input: {
     );
   };
 
-  if (allow["econ-series"] && (methods.has("time_series") || methods.has("macro"))) {
-    yield workingStatus("Series is querying FRED…");
+  if (allow["econ-series"]) {
+    yield workingStatus("Series & Macro specialists querying FRED…");
     queue("series", "econ.search_series", { query: input.queries.fred });
+    queue("macro", "econ.search_series", { query: input.queries.macro });
   }
-  if (allow.literature && methods.has("literature")) {
+  if (allow.literature) {
     yield workingStatus("Literature is searching OpenAlex…");
     queue("literature", "lit.search", { query: input.queries.lit });
   }
-  if (allow["policy-docs"] && methods.has("legal_text")) {
+  if (allow["policy-docs"]) {
     yield workingStatus("Legal is searching official policy documents…");
     queue("legal", "policy.search", { query: input.queries.policy });
-  }
-  if (allow["econ-series"] && methods.has("macro")) {
-    queue("macro", "econ.search_series", { query: input.queries.macro });
   }
 
   const settled = await Promise.all(jobs);
   for (const result of settled) {
     yield result.event;
+    if (result.span) collectedSpans.push(result.span);
   }
 
   const seriesSearch = settled.find(
     (item) => item.role === "series" && item.tool === "econ.search_series",
   );
-  const seriesId =
+  const seriesLead =
     seriesSearch &&
     seriesSearch.data &&
     typeof seriesSearch.data === "object" &&
-    Array.isArray((seriesSearch.data as { series?: Array<{ id?: string }> }).series)
-      ? (seriesSearch.data as { series: Array<{ id?: string }> }).series[0]?.id
+    Array.isArray((seriesSearch.data as { series?: FredSeries[] }).series)
+      ? (seriesSearch.data as { series: FredSeries[] }).series[0]
       : undefined;
+  const seriesId = seriesLead?.id;
 
   if (seriesId) {
-    const obs = await invoke("series", "econ.get_observations", { seriesId });
+    const obs = await invoke("series", "econ.get_observations", {
+      seriesId,
+      title: seriesLead?.title,
+      units: seriesLead?.units,
+    });
     yield obs.event;
     if (obs.span) {
+      collectedSpans.push(obs.span);
       const existing = findByKey(nodes, input.runId, "ev_fred");
       let node =
         existing ??
@@ -376,7 +418,9 @@ export async function* streamMcpSpecialists(input: {
           input.runId,
           "ev_fred",
           "evidence",
-          `FRED ${seriesId}`,
+          seriesLead?.title
+            ? `${seriesId}: ${seriesLead.title.slice(0, 44)}`
+            : `FRED ${seriesId}`,
           obs.span.citation,
         );
       if (node) {
@@ -386,8 +430,19 @@ export async function* streamMcpSpecialists(input: {
           nodes = upsertNode(nodes, node);
           yield { type: "node", node };
           yield { type: "analysis", analysis: makeAnalysis(node, obs.span) };
-          if (claim && claim.id !== node.id) {
-            yield { type: "edge", edge: makeEdge(input.runId, node.id, claim.id, "supports") };
+
+          // Propagate FRED empirical span onto the primary Claim node so it graduates to supported
+          const claimTarget = firstOfKind(nodes, "claim");
+          if (claimTarget && claimTarget.id !== node.id) {
+            yield {
+              type: "edge",
+              edge: makeEdge(input.runId, node.id, claimTarget.id, "supports"),
+            };
+            const promotedClaim = attachSpan("series", claimTarget, obs.span);
+            if (promotedClaim) {
+              nodes = upsertNode(nodes, promotedClaim);
+              yield { type: "node", node: promotedClaim };
+            }
           }
         }
       }
@@ -409,7 +464,7 @@ export async function* streamMcpSpecialists(input: {
           input.runId,
           "ev_openalex",
           "evidence",
-          works[0]?.title?.slice(0, 80) || "OpenAlex work",
+          works[0]?.title?.slice(0, 68) || "OpenAlex empirical study",
           lit.span.citation,
         );
       if (node) {
@@ -419,12 +474,19 @@ export async function* streamMcpSpecialists(input: {
           nodes = upsertNode(nodes, node);
           yield { type: "node", node };
           yield { type: "analysis", analysis: makeAnalysis(node, lit.span) };
-          const target = mechanism ?? claim;
-          if (target && target.id !== node.id) {
+
+          // Propagate OpenAlex span onto the primary Mechanism node so it graduates to supported
+          const mechTarget = firstOfKind(nodes, "mechanism") ?? firstOfKind(nodes, "claim");
+          if (mechTarget && mechTarget.id !== node.id) {
             yield {
               type: "edge",
-              edge: makeEdge(input.runId, node.id, target.id, "supports"),
+              edge: makeEdge(input.runId, node.id, mechTarget.id, "supports"),
             };
+            const promotedMech = attachSpan("literature", mechTarget, lit.span);
+            if (promotedMech) {
+              nodes = upsertNode(nodes, promotedMech);
+              yield { type: "node", node: promotedMech };
+            }
           }
         }
       }
@@ -438,29 +500,32 @@ export async function* streamMcpSpecialists(input: {
         ? ((policy.data as { docs?: Array<{ title?: string; url?: string }> }).docs ?? [])
         : [];
     if (docs.some((doc) => doc.title)) {
-      const existing =
-        findByKey(nodes, input.runId, "ev_policy") ?? constraint;
+      const constraintNode =
+        firstOfKind(nodes, "constraint") ?? findByKey(nodes, input.runId, "ev_policy");
       let node =
-        existing ??
+        constraintNode ??
         makeNode(
           "legal",
           input.runId,
           "ev_policy",
           "constraint",
-          docs[0]?.title?.slice(0, 80) || "Policy document",
+          docs[0]?.title?.slice(0, 68) || "Statutory / policy authority",
           policy.span.citation,
         );
       if (node) {
-        const attached = attachSpan("legal", { ...node, body: policy.span.citation }, policy.span);
+        const attached = attachSpan("legal", node, policy.span);
         if (attached) {
           node = attached;
           nodes = upsertNode(nodes, node);
           yield { type: "node", node };
-          yield { type: "analysis", analysis: makeAnalysis(node, policy.span) };
-          if (mechanism && mechanism.id !== node.id) {
+          if (!constraintNode) {
+            yield { type: "analysis", analysis: makeAnalysis(node, policy.span) };
+          }
+          const mechTarget = firstOfKind(nodes, "mechanism");
+          if (mechTarget && mechTarget.id !== node.id) {
             yield {
               type: "edge",
-              edge: makeEdge(input.runId, node.id, mechanism.id, "depends_on"),
+              edge: makeEdge(input.runId, node.id, mechTarget.id, "depends_on"),
             };
           }
         }
@@ -469,17 +534,26 @@ export async function* streamMcpSpecialists(input: {
   }
 
   const macro = settled.find((item) => item.role === "macro");
-  const macroId =
+  const macroSeriesList =
     macro &&
     macro.data &&
     typeof macro.data === "object" &&
-    Array.isArray((macro.data as { series?: Array<{ id?: string }> }).series)
-      ? (macro.data as { series: Array<{ id?: string }> }).series[0]?.id
-      : undefined;
+    Array.isArray((macro.data as { series?: FredSeries[] }).series)
+      ? (macro.data as { series: FredSeries[] }).series
+      : [];
+  const macroLead =
+    macroSeriesList.find((s) => s.id && s.id !== seriesId) ?? macroSeriesList[0];
+  const macroId = macroLead?.id;
+
   if (macroId && macroId !== seriesId) {
-    const obs = await invoke("macro", "econ.get_observations", { seriesId: macroId });
+    const obs = await invoke("macro", "econ.get_observations", {
+      seriesId: macroId,
+      title: macroLead?.title,
+      units: macroLead?.units,
+    });
     yield obs.event;
     if (obs.span) {
+      collectedSpans.push(obs.span);
       const existing = findByKey(nodes, input.runId, "ev_macro");
       let node =
         existing ??
@@ -488,7 +562,9 @@ export async function* streamMcpSpecialists(input: {
           input.runId,
           "ev_macro",
           "evidence",
-          `FRED ${macroId}`,
+          macroLead?.title
+            ? `${macroId}: ${macroLead.title.slice(0, 44)}`
+            : `FRED ${macroId}`,
           obs.span.citation,
         );
       if (node) {
@@ -498,8 +574,19 @@ export async function* streamMcpSpecialists(input: {
           nodes = upsertNode(nodes, node);
           yield { type: "node", node };
           yield { type: "analysis", analysis: makeAnalysis(node, obs.span) };
-          if (claim && claim.id !== node.id) {
-            yield { type: "edge", edge: makeEdge(input.runId, node.id, claim.id, "elaborates") };
+
+          // Propagate macro span to Incidence node if present
+          const incTarget = firstOfKind(nodes, "incidence") ?? firstOfKind(nodes, "claim");
+          if (incTarget && incTarget.id !== node.id) {
+            yield {
+              type: "edge",
+              edge: makeEdge(input.runId, node.id, incTarget.id, "elaborates"),
+            };
+            const promotedInc = attachSpan("macro", incTarget, obs.span);
+            if (promotedInc) {
+              nodes = upsertNode(nodes, promotedInc);
+              yield { type: "node", node: promotedInc };
+            }
           }
         }
       }
@@ -519,13 +606,17 @@ export async function* streamMcpSpecialists(input: {
       nodes = upsertNode(nodes, created);
       yield { type: "node", node: created };
       yield { type: "analysis", analysis: makeAnalysis(created, null) };
-      if (claim) {
-        yield { type: "edge", edge: makeEdge(input.runId, claim.id, created.id, "causal") };
+      const claimNode = firstOfKind(nodes, "claim");
+      if (claimNode) {
+        yield {
+          type: "edge",
+          edge: makeEdge(input.runId, claimNode.id, created.id, "causal"),
+        };
       }
     }
   }
 
-  return nodes;
+  return { nodes, spans: collectedSpans };
 }
 
 export function* applyCriticWalls(
@@ -569,25 +660,58 @@ export function fallbackDraft(
   question: string,
   nodes: DigressionNode[],
 ): RunDraft {
-  const lead = nodes.filter((node) => node.kind === "claim" || node.kind === "incidence");
-  const rest = nodes.filter((node) => node.kind !== "claim" && node.kind !== "incidence");
+  const lead = nodes.filter(
+    (node) => node.kind === "claim" || node.kind === "incidence" || node.kind === "mechanism",
+  );
+  const rest = nodes.filter(
+    (node) => node.kind !== "claim" && node.kind !== "incidence" && node.kind !== "mechanism",
+  );
   const lines = (lead.length > 0 ? lead : nodes).map(
     (node) =>
-      `- ${node.title} [${node.id}] — ${node.body}${
-        node.status === "supported" ? " (supported)" : ""
+      `- **${node.title}** [${shortNodeKey(node.id)}] — ${node.body}${
+        node.status === "supported" ? " *(supported by MCP span)*" : ""
       }`,
   );
   return {
-    brief: [`# ${title}`, "", question, "", "## Claims", "", ...lines].join("\n"),
+    brief: [
+      `## Executive Summary`,
+      `${question}`,
+      "",
+      "## Core Policy Findings",
+      ...lines,
+    ].join("\n"),
     appendix: rest
-      .map((node) => `### ${node.kind}: ${node.title}\n\n${node.body}\n\n[${node.id}]`)
+      .map(
+        (node) =>
+          `## ${node.kind.toUpperCase()}: ${node.title}\n${node.body} [${shortNodeKey(node.id)}]`,
+      )
       .join("\n\n"),
     updatedAt: nowIso(),
   };
 }
 
+export function normalizeNodeCitations(
+  text: string,
+  nodes: DigressionNode[],
+): string {
+  let out = text;
+  for (const node of nodes) {
+    const short = shortNodeKey(node.id);
+    // Replace full UUID node.id with clean [shortKey] for readability while keeping resolution exact
+    out = out.replaceAll(`[${node.id}]`, `[${short}]`);
+  }
+  return out;
+}
+
 export function draftCitesNodes(text: string, nodes: DigressionNode[]): boolean {
-  return nodes.some((node) => text.includes(node.id));
+  return nodes.some((node) => {
+    const short = shortNodeKey(node.id);
+    return (
+      text.includes(node.id) ||
+      text.includes(`[${short}]`) ||
+      text.toLowerCase().includes(`[${short.toLowerCase()}]`)
+    );
+  });
 }
 
 export async function* streamTraceNarrator(input: {
@@ -603,7 +727,7 @@ export async function* streamTraceNarrator(input: {
   const supported = input.nodes.filter((node) => node.status === "supported").length;
   const spans = input.nodes.reduce((sum, node) => sum + node.evidenceSpanIds.length, 0);
   yield workingStatus(
-    `Trace: ${spans} MCP span${spans === 1 ? "" : "s"}, ${supported} supported node${
+    `Trace verified: ${spans} MCP span${spans === 1 ? "" : "s"}, ${supported} supported node${
       supported === 1 ? "" : "s"
     }.`,
   );

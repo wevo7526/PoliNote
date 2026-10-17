@@ -26,8 +26,8 @@ export const SPACES = [
   {
     href: "/app/draft",
     id: "draft",
-    label: "Draft",
-    blurb: "Public brief and technical appendix from surviving nodes.",
+    label: "Report",
+    blurb: "Full policy report, FRED & spine charts, and verified bibliography.",
   },
 ] as const;
 

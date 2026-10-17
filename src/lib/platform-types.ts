@@ -4,8 +4,18 @@ import type { RunEvent } from "@/schemas/run-event";
 import type { ScopeContract } from "@/schemas/scope-contract";
 import type { ThreadItem } from "@/components/studio/thread-types";
 
+export type ProjectSummary = {
+  id: string;
+  title: string;
+  description: string;
+  contextMemo: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type RunSummary = {
   id: string;
+  projectId?: string;
   title: string;
   status: "draft" | "ready" | "running" | "paused" | "completed" | "failed";
   createdAt: string;
@@ -27,4 +37,6 @@ export type RunSnapshot = {
   analyses: Record<string, NodeAnalysis>;
   events: RunEvent[];
   draft: RunDraft | null;
+  invalidatedNodeIds?: string[];
+  invalidatedFields?: string[];
 };

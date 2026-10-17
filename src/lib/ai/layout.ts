@@ -15,14 +15,14 @@ export const SPINE_LANES = [
 export type SpineLane = (typeof SPINE_LANES)[number];
 export type PolicyLane = SpineLane | "digression";
 
-export const NODE_W = 260;
-export const NODE_H = 60;
-export const LANE_STEP = 300;
-export const SPINE_START_Y = 52;
-export const ROW_H = 100;
+export const NODE_W = 268;
+export const NODE_H = 88;
+export const LANE_STEP = 304;
+export const SPINE_START_Y = 58;
+export const ROW_H = 116;
 export const HEADER_Y = 22;
-export const BAND_GAP = 28;
-export const BAND_HEADER = 32;
+export const BAND_GAP = 32;
+export const BAND_HEADER = 36;
 
 export const LANE_X: Record<SpineLane, number> = {
   instrument: 40,
@@ -33,13 +33,22 @@ export const LANE_X: Record<SpineLane, number> = {
 };
 
 export const LANE_LABEL: Record<PolicyLane, string> = {
-  instrument: "Instrument",
-  mechanism: "Mechanism",
-  claim: "Claim / target",
-  identification: "Identification",
-  incidence: "Incidence",
-  digression: "Digressions",
+  instrument: "01 · Instrument",
+  mechanism: "02 · Mechanism",
+  claim: "03 · Claim / target",
+  identification: "04 · Identification",
+  incidence: "05 · Incidence",
+  digression: "Digression branches (Forks · Counterfactuals · Uncertainties)",
 };
+
+export const LANE_SUBTITLE: Record<SpineLane, string> = {
+  instrument: "Statute, tariff, tax, or rule",
+  mechanism: "Transmission channel",
+  claim: "Core effect & benchmark",
+  collector_fallback: "",
+  identification: "Empirical design & spans",
+  incidence: "Who pays & who gains",
+} as Record<SpineLane, string>;
 
 const KIND_LANE: Record<DigressionNodeKind, PolicyLane> = {
   constraint: "instrument",
@@ -55,6 +64,8 @@ const KIND_LANE: Record<DigressionNodeKind, PolicyLane> = {
 export type PolicyLayout = {
   nodes: DigressionNode[];
   laneOf: Map<string, PolicyLane>;
+  laneCounts: Record<SpineLane, number>;
+  digressionCount: number;
   spineBottom: number;
   bandTop: number;
   bandBottom: number;
@@ -67,6 +78,26 @@ export function nodeLane(kind: DigressionNodeKind): PolicyLane {
 function byStableOrder(a: DigressionNode, b: DigressionNode): number {
   const time = a.createdAt.localeCompare(b.createdAt);
   return time !== 0 ? time : a.id.localeCompare(b.id);
+}
+
+function fallbackDigressionX(node: DigressionNode): number {
+  const key = node.id.toLowerCase();
+  if (node.kind === "uncertainty" || key.includes("unc_") || key.includes("ident")) {
+    return LANE_X.identification;
+  }
+  if (key.includes("inst") || key.includes("con_") || key.includes("legal")) {
+    return LANE_X.instrument;
+  }
+  if (key.includes("mech") || key.includes("channel")) {
+    return LANE_X.mechanism;
+  }
+  if (key.includes("inc_") || key.includes("winner") || key.includes("dist")) {
+    return LANE_X.incidence;
+  }
+  if (node.kind === "fork") {
+    return LANE_X.mechanism;
+  }
+  return LANE_X.claim;
 }
 
 function spineParentX(
@@ -87,7 +118,7 @@ function spineParentX(
       return LANE_X[otherLane];
     }
   }
-  return LANE_X.claim;
+  return fallbackDigressionX(node);
 }
 
 export function layoutPolicyGraph(
@@ -113,11 +144,17 @@ export function layoutPolicyGraph(
     else spine[lane].push(node);
   }
 
+  const laneCounts: Record<SpineLane, number> = {
+    instrument: spine.instrument.length,
+    mechanism: spine.mechanism.length,
+    claim: spine.claim.length,
+    identification: spine.identification.length,
+    incidence: spine.incidence.length,
+  };
+
   const maxSpine = Math.max(1, ...SPINE_LANES.map((lane) => spine[lane].length));
   const spineBottom = SPINE_START_Y + maxSpine * ROW_H;
   const bandTop = spineBottom + BAND_GAP;
-  const bandBottom =
-    bandTop + BAND_HEADER + Math.max(1, digressions.length) * ROW_H;
 
   const placed = new Map<string, DigressionNode>();
   for (const lane of SPINE_LANES) {
@@ -128,19 +165,29 @@ export function layoutPolicyGraph(
       });
     });
   }
-  digressions.forEach((node, index) => {
+
+  const digressionRowsByX = new Map<number, number>();
+  for (const node of digressions) {
+    const x = spineParentX(node, edges, laneOf);
+    const colRow = digressionRowsByX.get(x) ?? 0;
+    digressionRowsByX.set(x, colRow + 1);
     placed.set(node.id, {
       ...node,
       position: {
-        x: spineParentX(node, edges, laneOf),
-        y: bandTop + BAND_HEADER + index * ROW_H,
+        x,
+        y: bandTop + BAND_HEADER + colRow * ROW_H,
       },
     });
-  });
+  }
+
+  const maxDigRow = Math.max(1, ...[0, ...digressionRowsByX.values()]);
+  const bandBottom = bandTop + BAND_HEADER + maxDigRow * ROW_H;
 
   return {
     nodes: nodes.map((node) => placed.get(node.id) ?? node),
     laneOf,
+    laneCounts,
+    digressionCount: digressions.length,
     spineBottom,
     bandTop,
     bandBottom,

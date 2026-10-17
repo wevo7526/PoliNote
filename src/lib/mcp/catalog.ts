@@ -1,3 +1,4 @@
+import { resolveFredKey } from "@/lib/mcp/fred";
 import type { McpServerName } from "@/mcp/servers";
 import type { ToolName } from "@/tools/registry";
 
@@ -32,8 +33,8 @@ export function mcpConfigured(): {
   firecrawl: boolean;
 } {
   return {
-    fred: Boolean(process.env.FRED_API_KEY?.trim()),
-    congress: Boolean(process.env.CONGRESS_API_KEY?.trim()),
-    firecrawl: Boolean(process.env.FIRECRAWL_API_KEY?.trim()),
+    fred: Boolean(resolveFredKey()),
+    congress: Boolean(process.env["CONGRESS_API_KEY"]?.trim()),
+    firecrawl: Boolean(process.env["FIRECRAWL_API_KEY"]?.trim()),
   };
 }

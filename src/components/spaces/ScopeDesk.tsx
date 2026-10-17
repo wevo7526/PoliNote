@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { NeedRun } from "@/components/app/NeedRun";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
+import { shortNodeKey } from "@/lib/ui/prose";
 import {
   isScopeReady,
   type AllowedMethod,
@@ -20,15 +22,15 @@ const METHODS: AllowedMethod[] = [
 ];
 
 const FIELDS: Array<{ key: keyof ScopeContract; label: string; rows?: number }> = [
-  { key: "objective", label: "Objective", rows: 6 },
-  { key: "instrument", label: "Instrument", rows: 6 },
-  { key: "target", label: "Target", rows: 5 },
-  { key: "identificationStrategy", label: "Identification", rows: 6 },
-  { key: "horizon", label: "Horizon", rows: 4 },
-  { key: "jurisdiction", label: "Jurisdiction", rows: 4 },
-  { key: "baseline", label: "Baseline", rows: 5 },
+  { key: "objective", label: "Objective", rows: 5 },
+  { key: "instrument", label: "Instrument", rows: 5 },
+  { key: "target", label: "Target", rows: 4 },
+  { key: "identificationStrategy", label: "Identification", rows: 5 },
+  { key: "horizon", label: "Horizon", rows: 3 },
+  { key: "jurisdiction", label: "Jurisdiction", rows: 3 },
+  { key: "baseline", label: "Baseline", rows: 4 },
   { key: "distributionalCut", label: "Distributional cut", rows: 3 },
-  { key: "question", label: "Source question", rows: 3 },
+  { key: "question", label: "Source question", rows: 2 },
 ];
 
 function emptyScope(runId: string): ScopeContract {
@@ -44,7 +46,7 @@ function emptyScope(runId: string): ScopeContract {
     identificationStrategy: "",
     distributionalCut: "",
     baseline: "",
-    allowedMethods: ["literature", "time_series", "legal_text"],
+    allowedMethods: ["literature", "time_series", "legal_text", "macro", "incidence"],
     forbiddenMoves: [],
     mcpAllowlist: {
       "econ-series": true,
@@ -59,7 +61,8 @@ function emptyScope(runId: string): ScopeContract {
 }
 
 export function ScopeDesk() {
-  const { snapshot, activeId, saveScope } = useWorkspace();
+  const router = useRouter();
+  const { snapshot, activeId, saveScope, send, busy } = useWorkspace();
   const [draft, setDraft] = useState<ScopeContract | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -81,6 +84,8 @@ export function ScopeDesk() {
   }
 
   const ready = isScopeReady(draft);
+  const invalidatedIds = snapshot?.invalidatedNodeIds ?? [];
+  const invalidatedFields = snapshot?.invalidatedFields ?? [];
 
   return (
     <main className="space-page">
@@ -94,10 +99,42 @@ export function ScopeDesk() {
               Protocol for this run
             </h1>
           </div>
-          <span className={`text-[11px] uppercase tracking-[0.12em] ${ready ? "text-[#8fbf9a]" : "text-[#d4b483]"}`}>
+          <span
+            className={`text-[11px] uppercase tracking-[0.12em] ${
+              ready ? "text-[#8fbf9a]" : "text-[#d4b483]"
+            }`}
+          >
             {ready ? "ready" : "incomplete"}
           </span>
         </header>
+
+        {invalidatedIds.length > 0 ? (
+          <div className="invalidation-banner">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#d4a08c]">
+                Invalidated {invalidatedIds.length} downstream node
+                {invalidatedIds.length === 1 ? "" : "s"} ({invalidatedIds.map(shortNodeKey).join(", ")})
+              </p>
+              <p className="mt-0.5 text-xs text-[var(--muted)]">
+                Edited scope fields ({invalidatedFields.join(", ")}) marked dependent graph nodes contested.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={busy}
+              className="node-action text-[var(--copper)]"
+              onClick={() => {
+                const keys = invalidatedIds.map(shortNodeKey).join(", ");
+                router.push(`/app/run?run=${activeId}`);
+                void send(
+                  `Re-evaluate the invalidated subgraph (${keys}) under the updated scope contract (${invalidatedFields.join(", ")}). Update mechanisms, evidence spans, and incidence.`,
+                );
+              }}
+            >
+              Re-run invalidated slice →
+            </button>
+          </div>
+        ) : null}
 
         <form
           className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
@@ -170,7 +207,12 @@ export function ScopeDesk() {
               {saving ? "Saving…" : "Save contract"}
             </button>
             {saved ? (
-              <span className="text-[12px] text-[#8fbf9a]">Saved to this run</span>
+              <span className="text-[12px] text-[#8fbf9a]">
+                Saved to this run
+                {invalidatedIds.length > 0
+                  ? ` · ${invalidatedIds.length} affected node(s) marked contested`
+                  : ""}
+              </span>
             ) : null}
           </div>
         </form>

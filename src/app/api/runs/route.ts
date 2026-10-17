@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { listProjects } from "@/lib/db/projects";
 import { createRun, listRuns } from "@/lib/db/runs";
 import { getSessionUserId } from "@/lib/session";
 
@@ -12,8 +13,11 @@ function publicError(error: unknown): string {
 export async function GET() {
   try {
     const userId = await getSessionUserId();
-    const runs = await listRuns(userId);
-    return NextResponse.json({ runs });
+    const [projects, runs] = await Promise.all([
+      listProjects(userId),
+      listRuns(userId),
+    ]);
+    return NextResponse.json({ projects, runs });
   } catch (error) {
     const message = publicError(error);
     console.error("[polinote/runs] list failed", message);
@@ -21,10 +25,18 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const userId = await getSessionUserId();
-    const run = await createRun(userId);
+    const body = (await request.json().catch(() => null)) as {
+      projectId?: unknown;
+      title?: unknown;
+    } | null;
+    const projectId =
+      typeof body?.projectId === "string" ? body.projectId.trim() : undefined;
+    const title =
+      typeof body?.title === "string" ? body.title.trim() : undefined;
+    const run = await createRun(userId, { projectId, title });
     return NextResponse.json({ run }, { status: 201 });
   } catch (error) {
     const message = publicError(error);

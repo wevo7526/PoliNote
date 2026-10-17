@@ -5,11 +5,13 @@ import {
   type CrewStreamEvent,
 } from "@/lib/ai/crew-events";
 import { draftsFromCrewEvent } from "@/lib/ai/run-log";
-import { appendRunEvent } from "@/lib/db/events";
+import type { RunEventDraft } from "@/lib/db/events";
+import { getProjectContextDigest } from "@/lib/db/projects";
 import { assertRunExists, getRun, persistTurn } from "@/lib/db/runs";
 import { getSessionUserId } from "@/lib/session";
 import type { RunSnapshot } from "@/lib/platform-types";
 import type { ThreadItem } from "@/components/studio/thread-types";
+import type { RunEvent } from "@/schemas/run-event";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -31,6 +33,7 @@ async function persistSnapshot(userId: string, snapshot: RunSnapshot): Promise<v
     scope: snapshot.scope,
     analyses: Object.values(snapshot.analyses),
     draft: snapshot.draft,
+    events: snapshot.events,
   });
 }
 
@@ -52,6 +55,12 @@ export async function POST(request: Request, ctx: RouteCtx) {
   if (!current) {
     return Response.json({ error: "Run not found" }, { status: 404 });
   }
+
+  const projectContext = await getProjectContextDigest(
+    userId,
+    current.run.projectId,
+    runId,
+  ).catch(() => "");
 
   const userItem: Extract<ThreadItem, { kind: "user" }> = {
     id: crypto.randomUUID(),
@@ -98,6 +107,26 @@ export async function POST(request: Request, ctx: RouteCtx) {
         { type: "user", item: userItem },
       );
 
+      let nextSeq =
+        snapshot.events.reduce((max, ev) => Math.max(max, ev.seq), -1) + 1;
+
+      const mintEvent = (draft: RunEventDraft): RunEvent => {
+        const event: RunEvent = {
+          id: crypto.randomUUID(),
+          runId,
+          seq: nextSeq++,
+          type: draft.type,
+          ts: new Date().toISOString(),
+          agent: draft.agent,
+          spanId: draft.spanId,
+          parentSpanId: draft.parentSpanId,
+          payload: draft.payload ?? {},
+        };
+        snapshot = applyCrewEvent(snapshot, { type: "log", event });
+        send({ type: "log", event });
+        return event;
+      };
+
       const persistSafe = async (next: RunSnapshot) => {
         try {
           await persistSnapshot(userId, next);
@@ -111,23 +140,19 @@ export async function POST(request: Request, ctx: RouteCtx) {
 
       const seenNarration = new Set<string>();
       const knownNodes = new Set(snapshot.nodes.map((node) => node.id));
-      const emitLogs = async (event: CrewStreamEvent) => {
+      const emitLogs = (event: CrewStreamEvent) => {
         for (const draft of draftsFromCrewEvent(event, seenNarration, knownNodes)) {
-          const logged = await appendRunEvent(userId, runId, draft);
-          snapshot = applyCrewEvent(snapshot, { type: "log", event: logged });
-          send({ type: "log", event: logged });
+          mintEvent(draft);
           if (event.type === "node") knownNodes.add(event.node.id);
         }
       };
 
       try {
         send({ type: "user", item: userItem });
-        const started = await appendRunEvent(userId, runId, {
+        mintEvent({
           type: "run.started",
           payload: { question: originalQuestion },
         });
-        snapshot = applyCrewEvent(snapshot, { type: "log", event: started });
-        send({ type: "log", event: started });
         await persistSafe(snapshot);
 
         let lastPersist: "scope" | "graph" | "spans" | "draft" | null = null;
@@ -136,6 +161,7 @@ export async function POST(request: Request, ctx: RouteCtx) {
           userId,
           question: originalQuestion,
           latestMessage: text,
+          projectContext,
           prior: {
             scope: current.scope,
             nodes: current.nodes,
@@ -149,7 +175,7 @@ export async function POST(request: Request, ctx: RouteCtx) {
         })) {
           snapshot = applyCrewEvent(snapshot, event);
           send(event);
-          await emitLogs(event);
+          emitLogs(event);
           if (event.type === "scope" && lastPersist !== "scope") {
             lastPersist = "scope";
             await persistSafe(snapshot);
@@ -174,7 +200,10 @@ export async function POST(request: Request, ctx: RouteCtx) {
 
         snapshot = {
           ...snapshot,
-          run: { ...snapshot.run, status: snapshot.nodes.length ? "ready" : snapshot.run.status },
+          run: {
+            ...snapshot.run,
+            status: snapshot.nodes.length ? "ready" : snapshot.run.status,
+          },
         };
         await persistSafe(snapshot);
       } catch (error) {
@@ -194,6 +223,7 @@ export async function POST(request: Request, ctx: RouteCtx) {
         } else {
           const message = publicCrewError(error);
           console.error("[polinote/messages]", message);
+          mintEvent({ type: "run.failed", payload: { message } });
           const fail = applyCrewEvent(snapshot, { type: "error", message });
           send({ type: "error", message });
           await persistSafe(fail);

@@ -3,6 +3,7 @@ export type ProseInline =
   | { kind: "strong"; text: string }
   | { kind: "em"; text: string }
   | { kind: "code"; text: string }
+  | { kind: "cite"; ref: string }
   | { kind: "link"; text: string; href: string };
 
 export type ProseBlock =
@@ -61,10 +62,19 @@ function headingFrom(line: string): string | null {
   return null;
 }
 
+export function shortNodeKey(rawRef: string): string {
+  const trimmed = rawRef.replace(/^\[|\]$/g, "").trim();
+  const uuidPrefix =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_(.+)$/i.exec(
+      trimmed,
+    );
+  return uuidPrefix?.[1] ?? trimmed;
+}
+
 export function parseInline(text: string): ProseInline[] {
   const parts: ProseInline[] = [];
   const pattern =
-    /(\*\*[^*]+?\*\*|__[^_]+?__|`[^`]+?`|\[[^\]]+?\]\([^)]+?\)|\*[^*\n]+?\*)/g;
+    /(\*\*[^*]+?\*\*|__[^_]+?__|`\[[a-zA-Z0-9_-]{3,80}\]`|`[^`]+?`|\[[^\]]+?\]\([^)]+?\)|\[[a-zA-Z0-9_-]{3,80}\]|\*[^*\n]+?\*)/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text))) {
@@ -74,11 +84,20 @@ export function parseInline(text: string): ProseInline[] {
     const token = match[0];
     if (token.startsWith("**") || token.startsWith("__")) {
       parts.push({ kind: "strong", text: token.slice(2, -2) });
+    } else if (token.startsWith("`[") && token.endsWith("]`")) {
+      parts.push({ kind: "cite", ref: token.slice(2, -2) });
     } else if (token.startsWith("`")) {
-      parts.push({ kind: "code", text: token.slice(1, -1) });
-    } else if (token.startsWith("[")) {
+      const inner = token.slice(1, -1);
+      if (/^[0-9a-f]{8}-[0-9a-f-]{27}_[a-z0-9_]+$/i.test(inner)) {
+        parts.push({ kind: "cite", ref: inner });
+      } else {
+        parts.push({ kind: "code", text: inner });
+      }
+    } else if (token.startsWith("[") && token.includes("](")) {
       const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (link) parts.push({ kind: "link", text: link[1] ?? "", href: link[2] ?? "" });
+    } else if (token.startsWith("[") && token.endsWith("]")) {
+      parts.push({ kind: "cite", ref: token.slice(1, -1) });
     } else if (token.startsWith("*")) {
       parts.push({ kind: "em", text: token.slice(1, -1) });
     }
@@ -88,12 +107,13 @@ export function parseInline(text: string): ProseInline[] {
     parts.push({ kind: "text", text: text.slice(cursor) });
   }
   return parts
-    .map((part) =>
-      part.kind === "link" || part.kind === "code"
-        ? part
-        : { ...part, text: part.text.replace(/\*\*/g, "").replace(/__/g, "") },
-    )
-    .filter((part) => part.text.length > 0);
+    .map((part) => {
+      if (part.kind === "link" || part.kind === "code" || part.kind === "cite") {
+        return part;
+      }
+      return { ...part, text: part.text.replace(/\*\*/g, "").replace(/__/g, "") };
+    })
+    .filter((part) => (part.kind === "cite" ? part.ref.length > 0 : part.text.length > 0));
 }
 
 function unwrapFences(text: string): string {

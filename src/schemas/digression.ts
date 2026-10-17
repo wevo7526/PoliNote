@@ -58,6 +58,17 @@ export const ProvenanceChipSchema = z.object({
   /** Hashed MCP / event span id when evidence-backed. */
   spanId: z.string().optional(),
   url: z.string().url().optional(),
+  seriesId: z.string().optional(),
+  seriesTitle: z.string().optional(),
+  units: z.string().optional(),
+  seriesPoints: z
+    .array(
+      z.object({
+        date: z.string(),
+        value: z.number(),
+      }),
+    )
+    .optional(),
 });
 
 export type ProvenanceChip = z.infer<typeof ProvenanceChipSchema>;

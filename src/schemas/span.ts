@@ -1,6 +1,13 @@
 import { z } from "zod";
 import type { McpServerName } from "@/mcp/servers";
 
+export const SeriesPointSchema = z.object({
+  date: z.string(),
+  value: z.number(),
+});
+
+export type SeriesPoint = z.infer<typeof SeriesPointSchema>;
+
 export const EvidenceSpanSchema = z.object({
   id: z.string().min(1),
   server: z.enum([
@@ -14,9 +21,11 @@ export const EvidenceSpanSchema = z.object({
   citation: z.string().min(1),
   url: z.string().url().optional(),
   seriesId: z.string().optional(),
+  seriesTitle: z.string().optional(),
   frequency: z.string().optional(),
   units: z.string().optional(),
   vintage: z.string().optional(),
+  seriesPoints: z.array(SeriesPointSchema).optional(),
   resultHash: z.string().min(1),
 });
 

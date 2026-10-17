@@ -2,7 +2,7 @@ export async function getJson<T>(
   url: string,
   init: RequestInit & { timeoutMs?: number } = {},
 ): Promise<T> {
-  const timeoutMs = init.timeoutMs ?? 8000;
+  const timeoutMs = init.timeoutMs ?? 9000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -15,7 +15,20 @@ export async function getJson<T>(
       },
     });
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      let detail = "";
+      try {
+        const errBody = (await response.json()) as {
+          error_message?: string;
+          message?: string;
+          error?: string;
+        };
+        detail = errBody.error_message || errBody.message || errBody.error || "";
+      } catch {
+        /* ignore non-json error body */
+      }
+      throw new Error(
+        detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`,
+      );
     }
     return (await response.json()) as T;
   } finally {

@@ -23,16 +23,24 @@ export function LandingHero() {
         <h1 className="mt-8 font-[family-name:var(--font-display)] text-[clamp(3.4rem,12vw,6.4rem)] leading-none tracking-[-0.04em] text-[var(--ink)]">
           PoliNote
         </h1>
-        <p className="mt-4 max-w-sm text-sm leading-relaxed text-[var(--muted)] md:text-base">
-          Ask a policy question. The crew builds the argument in front of you.
+        <p className="mt-4 max-w-md text-sm leading-relaxed text-[var(--muted)] md:text-base">
+          Ask a policy question. Projects, empirical FRED series, and a 6-role crew build the argument and report in front of you.
         </p>
 
-        <Link
-          href="/app/run"
-          className="enter-btn mt-10 inline-flex h-12 items-center justify-center px-10 text-[13px] font-semibold uppercase tracking-[0.22em] text-[var(--bg)]"
-        >
-          Enter
-        </Link>
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href="/app/run"
+            className="enter-btn inline-flex h-12 items-center justify-center px-9 text-[13px] font-semibold uppercase tracking-[0.22em] text-[var(--bg)]"
+          >
+            Enter Workbench
+          </Link>
+          <Link
+            href="/app/sandbox"
+            className="inline-flex h-12 items-center justify-center border border-[var(--copper)]/60 bg-[var(--paper)] px-7 text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--copper)] transition hover:bg-[var(--copper)]/15"
+          >
+            Persona Sandbox
+          </Link>
+        </div>
       </div>
     </main>
   );

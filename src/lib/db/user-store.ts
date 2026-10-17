@@ -81,8 +81,17 @@ function isEphemeralRuntime(): boolean {
 }
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS projects (
+  id VARCHAR PRIMARY KEY,
+  title VARCHAR NOT NULL,
+  description VARCHAR NOT NULL,
+  context_memo VARCHAR NOT NULL,
+  created_at VARCHAR NOT NULL,
+  updated_at VARCHAR NOT NULL
+);
 CREATE TABLE IF NOT EXISTS runs (
   id VARCHAR PRIMARY KEY,
+  project_id VARCHAR,
   title VARCHAR NOT NULL,
   status VARCHAR NOT NULL,
   created_at VARCHAR NOT NULL,
@@ -143,6 +152,15 @@ CREATE TABLE IF NOT EXISTS memos (
 `;
 
 const EXTRA_SCHEMA = `
+CREATE TABLE IF NOT EXISTS projects (
+  id VARCHAR PRIMARY KEY,
+  title VARCHAR NOT NULL,
+  description VARCHAR NOT NULL,
+  context_memo VARCHAR NOT NULL,
+  created_at VARCHAR NOT NULL,
+  updated_at VARCHAR NOT NULL
+);
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS project_id VARCHAR;
 CREATE TABLE IF NOT EXISTS drafts (
   run_id VARCHAR PRIMARY KEY,
   brief VARCHAR NOT NULL,
@@ -202,6 +220,7 @@ async function openUserDb(userId: string): Promise<UserDb> {
 
     const connection = await instance.connect();
     await connection.run(SCHEMA);
+    await connection.run(EXTRA_SCHEMA);
     const db: UserDb = { instance, connection, queue: Promise.resolve(), extras: true };
     cache.dbs.set(userId, db);
     return db;

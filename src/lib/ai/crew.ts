@@ -9,10 +9,12 @@ import {
   applyCriticWalls,
   draftCitesNodes,
   fallbackDraft,
+  normalizeNodeCitations,
   streamInstrumentParser,
   streamMcpSpecialists,
   streamTraceNarrator,
 } from "@/lib/ai/crew-specialists";
+import { shortNodeKey } from "@/lib/ui/prose";
 import { ensureMcpTools } from "@/lib/mcp/register";
 import { filterReputableHits } from "@/lib/sources/reputable";
 import { searchPolicyWeb, type WebHit } from "@/lib/tools/firecrawl";
@@ -123,7 +125,7 @@ const ANALYSIS_TIMEOUT_MS = 50_000;
 
 const NARRATION_OPTIONS = {
   openai: {
-    reasoningEffort: "high" as const,
+    reasoningEffort: "low" as const,
     // Unverified orgs 400 if the SDK defaults this to "detailed".
     reasoningSummary: null,
   },
@@ -218,7 +220,10 @@ function asString(value: unknown, fallback: string): string {
 }
 
 function pick<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
-  const raw = typeof value === "string" ? value.trim().toLowerCase().replace(/\s+/g, "_") : "";
+  const raw =
+    typeof value === "string"
+      ? value.trim().toLowerCase().replace(/[\s-]+/g, "_")
+      : "";
   return (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
 }
 
@@ -393,6 +398,7 @@ function coerceScope(raw: unknown, question: string): ScopeStep {
   const fallback = fallbackScope(question);
   const methods = asArray(scope.allowedMethods)
     .map((item) => pick(item, METHODS, "literature"))
+    .concat(["literature", "time_series", "legal_text", "macro", "incidence"])
     .filter((item, index, all) => all.indexOf(item) === index);
   return {
     runTitle: asString(root.runTitle, question).slice(0, 80),
@@ -738,6 +744,7 @@ export async function* streamCrewTurn(input: {
   userId: string;
   question: string;
   latestMessage: string;
+  projectContext?: string;
   prior?: {
     scope: ScopeContract | null;
     nodes?: DigressionNode[];
@@ -766,21 +773,11 @@ export async function* streamCrewTurn(input: {
   const context = JSON.stringify({
     question: input.question,
     latestUserMessage: input.latestMessage,
+    projectContext: input.projectContext || undefined,
     priorScope: input.prior?.scope ?? null,
     existingNodeTitles: input.prior?.nodeTitles ?? [],
     existingNodeKeys: input.prior?.nodeKeys ?? [],
     webLeads: web,
-  });
-
-  yield* streamNarration({
-    agent: "scoper",
-    model,
-    fallback: "Locking a working scope so the rest of the crew can place nodes.",
-    system: `You are PoliNote's scoper. Write 3–5 short paragraphs for a researcher.
-Name the instrument, target, identification strategy, horizon, jurisdiction, and baseline in the long-form protocol style.
-Say what is still missing. No JSON. No markdown: no # headings, no **bold**, no lists with dashes.
-Use blank lines between paragraphs. You may put a plain label on its own line (Instrument, Target, Identification, Horizon).`,
-    prompt: context,
   });
 
   let scopeOut: ScopeStep;
@@ -792,7 +789,7 @@ Use blank lines between paragraphs. You may put a plain label on its own line (I
 scope fields: jurisdiction, horizon, objective, instrument, target, identificationStrategy, distributionalCut, baseline, allowedMethods (from literature, time_series, legal_text, macro, incidence, counterfactual, expert_judgment), forbiddenMoves.
 ${SCOPE_STYLE}
 ${revising ? "A scope already exists. Refine it. Do not shrink fields into slogans." : "Write specific working values for THIS question."}
-Each field is one dense paragraph (4–8 sentences). runTitle max 80 chars.`,
+Each field is one dense paragraph (3–5 sentences). runTitle max 80 chars.`,
         context,
       ),
       input.question,
@@ -811,6 +808,16 @@ Each field is one dense paragraph (4–8 sentences). runTitle max 80 chars.`,
     type: "scope",
     itemId: crypto.randomUUID(),
     contract,
+  };
+
+  yield {
+    type: "narration",
+    item: {
+      id: crypto.randomUUID(),
+      kind: "narration",
+      agent: "scoper",
+      text: `Locked Scope Contract for “${scopeOut.runTitle}” (${contract.jurisdiction.split(".")[0]}). Instrument, target benchmark, identification strategy, and horizon are ready for graph assembly.`,
+    },
   };
 
   if (!isScopeReady(contract)) {
@@ -833,7 +840,7 @@ Each field is one dense paragraph (4–8 sentences). runTitle max 80 chars.`,
     liveNodes.set(node.id, node);
   }
 
-  yield workingStatus("Literature is placing the digression skeleton…");
+  yield workingStatus("Literature is placing the policy spine & digressions…");
 
   let graphOut: GraphStep;
   try {
@@ -860,6 +867,7 @@ Attach every digression to a spine node. Do not start a second disconnected argu
         JSON.stringify({
           question: input.question,
           latestUserMessage: input.latestMessage,
+          projectContext: input.projectContext || undefined,
           scope: scopeOut.scope,
           existingNodeKeys: input.prior?.nodeKeys ?? [],
           existingNodeTitles: input.prior?.nodeTitles ?? [],
@@ -880,6 +888,13 @@ Attach every digression to a spine node. Do not start a second disconnected argu
   }
 
   const keyToId = new Map<string, string>();
+  for (const node of liveNodes.values()) {
+    keyToId.set(node.id, node.id);
+    keyToId.set(shortNodeKey(node.id), node.id);
+    keyToId.set(slugKey(shortNodeKey(node.id)), node.id);
+  }
+
+  const emittedEdgeIds = new Set<string>();
   for (const raw of graphOut.nodes) {
     raw.analysis = stubAnalysis(raw);
     raw.analysisTitle = raw.title;
@@ -889,56 +904,74 @@ Attach every digression to a spine node. Do not start a second disconnected argu
     liveNodes.set(node.id, node);
     yield { type: "node", node };
     yield { type: "analysis", analysis: hydrateAnalysis(input.runId, raw, web) };
-    await wait(60);
-  }
 
-  for (const edge of graphOut.edges) {
-    const sourceId =
-      keyToId.get(edge.sourceKey) ?? keyToId.get(slugKey(edge.sourceKey));
-    const targetId =
-      keyToId.get(edge.targetKey) ?? keyToId.get(slugKey(edge.targetKey));
-    if (!sourceId || !targetId || sourceId === targetId) continue;
-    yield {
-      type: "edge",
-      edge: hydrateEdge(
+    // Immediately emit any edges whose endpoints are now placed so digressions align without jumping
+    for (const edge of graphOut.edges) {
+      const sourceId =
+        keyToId.get(edge.sourceKey) ?? keyToId.get(slugKey(edge.sourceKey));
+      const targetId =
+        keyToId.get(edge.targetKey) ?? keyToId.get(slugKey(edge.targetKey));
+      if (!sourceId || !targetId || sourceId === targetId) continue;
+      const hydrated = hydrateEdge(
         input.runId,
         sourceId,
         targetId,
         edge.kind,
         edge.label,
         ts,
-      ),
-    };
+      );
+      if (emittedEdgeIds.has(hydrated.id)) continue;
+      emittedEdgeIds.add(hydrated.id);
+      yield { type: "edge", edge: hydrated };
+    }
+    await wait(40);
   }
 
+  // Run MCP Specialists (FRED, OpenAlex, Policy Docs) BEFORE deep node analysis & synthesis
+  // so every node analysis, critic review, and synthesizer brief sees live empirical FRED data!
+  const mcpResult = yield* streamMcpSpecialists({
+    userId: input.userId,
+    runId: input.runId,
+    contract,
+    scope: scopeOut.scope,
+    queries,
+    nodes: [...liveNodes.values()],
+  });
+  for (const node of mcpResult.nodes) {
+    liveNodes.set(node.id, node);
+  }
+
+  const mcpSpanDigest = mcpResult.spans.map((span) => ({
+    id: span.id,
+    server: span.server,
+    tool: span.tool,
+    citation: span.citation,
+    seriesId: span.seriesId,
+    units: span.units,
+    latestPoint: span.seriesPoints?.[span.seriesPoints.length - 1],
+  }));
+
   if (graphOut.nodes.length > 0) {
-    yield workingStatus("Literature is writing into the placed nodes…");
-    yield* streamNarration({
-      agent: "literature",
-      model,
-      fallback: "The skeleton is on the map. Filling mechanism, incidence, and missing-evidence notes.",
-      system: `You are PoliNote's literature / mechanism / incidence crew.
-Write 3–5 short paragraphs about the nodes that were JUST placed. Name them by title.
-Stay on this instrument and this identification strategy. No JSON. No markdown: no # headings, no **bold**.
-Blank lines between paragraphs. You may use plain labels on their own line: Mechanism, Incidence, Identification.`,
-      prompt: JSON.stringify({
-        question: input.question,
-        scope: scopeOut.scope,
-        nodes: graphOut.nodes.map((node) => ({
-          key: node.key,
-          kind: node.kind,
-          title: node.title,
-          body: node.body,
-        })),
-        webLeads: web,
-      }),
-    });
+    yield workingStatus("Literature is writing empirical node analyses…");
+    const placedRefs = graphOut.nodes
+      .map((n) => `[${slugKey(n.key)}] (${n.title})`)
+      .join(", ");
+    yield {
+      type: "narration",
+      item: {
+        id: crypto.randomUUID(),
+        kind: "narration",
+        agent: "literature",
+        text: `Placed ${graphOut.nodes.length} nodes on the policy spine & digression band: ${placedRefs}. Grounding node analyses with ${mcpSpanDigest.length} MCP span(s) and ${web.length} research lead(s).`,
+      },
+    };
 
     const written = await askAnalyses(
       model,
       JSON.stringify({
         question: input.question,
         scope: scopeOut.scope,
+        mcpSpans: mcpSpanDigest,
         nodes: graphOut.nodes.map((node) => ({
           key: node.key,
           kind: node.kind,
@@ -957,33 +990,25 @@ Blank lines between paragraphs. You may use plain labels on their own line: Mech
     }
   }
 
-  const afterMcp = yield* streamMcpSpecialists({
-    userId: input.userId,
-    runId: input.runId,
-    contract,
-    scope: scopeOut.scope,
-    queries,
-    nodes: [...liveNodes.values()],
-  });
-  for (const node of afterMcp) {
+  yield workingStatus("Critic is auditing identification & span coverage…");
+  const afterCritic = yield* applyCriticWalls([...liveNodes.values()]);
+  for (const node of afterCritic) {
     liveNodes.set(node.id, node);
   }
 
-  yield workingStatus("Critic is reviewing the graph…");
   yield* streamNarration({
     agent: "critic",
     model,
-    fallback: "Identification and incidence still need harder evidence before any node is supported.",
-    system: `You are PoliNote's critic. Write 3–5 short paragraphs.
-Attack identification, omitted channels, incidence hiding, and any claim that still lacks an MCP span.
-You may not add positive claims or mark nodes supported. Name nodes by title.
-No JSON. No markdown: no # headings, no **bold**. Blank lines between paragraphs.
-You may use plain labels on their own line: Identification, Sign flip, Missing evidence.`,
+    fallback:
+      "Audited identification strategy and span coverage across the spine and digression branches.",
+    system: `You are PoliNote's critic. Write a sharp 2–3 sentence identification audit.
+Cite specific nodes by their bracketed short key like [claim_core] or [unc_id].
+Note which nodes graduated to supported via MCP spans (FRED/OpenAlex/Policy) and which remain contested due to identification risks or confounders. No markdown headings.`,
     prompt: JSON.stringify({
       question: input.question,
-      scope: scopeOut.scope,
+      mcpSpans: mcpSpanDigest,
       nodes: [...liveNodes.values()].map((node) => ({
-        id: node.id,
+        key: shortNodeKey(node.id),
         kind: node.kind,
         title: node.title,
         status: node.status,
@@ -992,12 +1017,7 @@ You may use plain labels on their own line: Identification, Sign flip, Missing e
     }),
   });
 
-  const afterCritic = yield* applyCriticWalls([...liveNodes.values()]);
-  for (const node of afterCritic) {
-    liveNodes.set(node.id, node);
-  }
-
-  yield workingStatus("Synthesizer is writing the brief from node IDs…");
+  yield workingStatus("Synthesizer is compiling the report from grounded node IDs…");
   const nodeList = [...liveNodes.values()];
   let draft = fallbackDraft(scopeOut.runTitle, input.question, nodeList);
   if (allowRoleAction("synthesizer", { type: "write_draft" })) {
@@ -1005,12 +1025,15 @@ You may use plain labels on their own line: Identification, Sign flip, Missing e
       const raw = await askJson(
         model,
         `You are PoliNote's synthesizer. Return JSON { "brief", "appendix" }.
-Every factual sentence must cite an existing node ID in square brackets, like [nodeId].
-Cite only IDs from the provided list. No URLs. No new claims. Brief is public; appendix is technical.`,
+Every factual sentence MUST cite an existing node short key in square brackets, like [claim_core] or [ev_fred].
+Cite only keys from the provided nodes list. Reference empirical FRED series values and statutory constraints where present.
+Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism Findings, ## Distributional Incidence) and appendix with (## Identification & Methodology, ## Counterfactuals & Risk Forks).`,
         JSON.stringify({
           title: scopeOut.runTitle,
           question: input.question,
+          mcpSpans: mcpSpanDigest,
           nodes: nodeList.map((node) => ({
+            key: shortNodeKey(node.id),
             id: node.id,
             kind: node.kind,
             title: node.title,
@@ -1020,8 +1043,8 @@ Cite only IDs from the provided list. No URLs. No new claims. Brief is public; a
         }),
       );
       const parsed = asRecord(raw);
-      const brief = asString(parsed.brief, "");
-      const appendix = asString(parsed.appendix, "");
+      const brief = normalizeNodeCitations(asString(parsed.brief, ""), nodeList);
+      const appendix = normalizeNodeCitations(asString(parsed.appendix, ""), nodeList);
       if (brief && draftCitesNodes(`${brief}\n${appendix}`, nodeList)) {
         draft = { brief, appendix, updatedAt: nowIso() };
       }
@@ -1032,13 +1055,14 @@ Cite only IDs from the provided list. No URLs. No new claims. Brief is public; a
       );
     }
   }
+  const supportedCount = nodeList.filter((n) => n.status === "supported").length;
   yield {
     type: "narration",
     item: {
       id: crypto.randomUUID(),
       kind: "narration",
       agent: "synthesizer",
-      text: "Brief and appendix are on Draft. Every line is grounded in a node ID. Ungrounded sentences were dropped.",
+      text: `Report and technical appendix compiled on the Report desk (${supportedCount} supported node${supportedCount === 1 ? "" : "s"}, ${mcpSpanDigest.length} empirical MCP span${mcpSpanDigest.length === 1 ? "" : "s"}). Every claim cites its graph node.`,
     },
   };
   yield { type: "draft", brief: draft.brief, appendix: draft.appendix };

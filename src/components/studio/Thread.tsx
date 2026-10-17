@@ -4,11 +4,13 @@ import type { RefObject } from "react";
 import { ResponseCard } from "./ResponseCard";
 import type { ThreadItem } from "./thread-types";
 import { groupThreadTurns } from "@/lib/ui/thread-turns";
+import type { DigressionNode } from "@/schemas/digression";
 import type { RunEvent } from "@/schemas/run-event";
 
 type ThreadProps = {
   items: ThreadItem[];
   events?: RunEvent[];
+  nodes?: DigressionNode[];
   onOpenNode: (id: string) => void;
   listRef: RefObject<HTMLDivElement | null>;
 };
@@ -16,6 +18,7 @@ type ThreadProps = {
 export function Thread({
   items,
   events = [],
+  nodes = [],
   onOpenNode,
   listRef,
 }: ThreadProps) {
@@ -44,6 +47,7 @@ export function Thread({
                 <ResponseCard
                   items={turn.items}
                   events={turn.events}
+                  nodes={nodes}
                   finished={turn.finished}
                   onOpenNode={onOpenNode}
                 />
