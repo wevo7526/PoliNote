@@ -1,16 +1,27 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useMemo, useRef } from "react";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import { NodeActions } from "@/components/studio/NodeActions";
-import { shortNodeKey } from "@/lib/ui/prose";
+import {
+  EDGE_KIND_TAXONOMY,
+  NODE_KIND_TAXONOMY,
+  buildNodeProvenanceTrace,
+} from "@/lib/ui/node-taxonomy";
 import type { NodeAnalysis } from "@/schemas/analysis";
-import type { DigressionNode, UserNodeStatus } from "@/schemas/digression";
+import type {
+  DigressionEdge,
+  DigressionNode,
+  UserNodeStatus,
+} from "@/schemas/digression";
+import type { RunEvent } from "@/schemas/run-event";
 
 type AnalysisModalProps = {
   node: DigressionNode;
   analysis: NodeAnalysis | null;
   allNodes?: DigressionNode[];
+  edges?: DigressionEdge[];
+  events?: RunEvent[];
   onClose: () => void;
   onOpenNode?: (id: string) => void;
   onSetStatus?: (nodeId: string, status: UserNodeStatus) => void;
@@ -21,7 +32,9 @@ type AnalysisModalProps = {
 export function AnalysisModal({
   node,
   analysis,
-  allNodes,
+  allNodes = [],
+  edges = [],
+  events = [],
   onClose,
   onOpenNode,
   onSetStatus,
@@ -44,6 +57,11 @@ export function AnalysisModal({
     };
   }, [onClose]);
 
+  const trace = useMemo(
+    () => buildNodeProvenanceTrace(node, allNodes, edges, events),
+    [node, allNodes, edges, events],
+  );
+
   const seriesChips = node.provenance.filter(
     (chip) => chip.seriesPoints && chip.seriesPoints.length >= 2,
   );
@@ -61,22 +79,32 @@ export function AnalysisModal({
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2">
-              <p className={`kind-tag kind-${node.kind}`}>{node.kind}</p>
-              <span className="font-mono text-[10px] text-[var(--muted)]">
-                [{shortNodeKey(node.id)}]
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]"
+                style={{
+                  backgroundColor: `${trace.kindInfo.color}22`,
+                  color: trace.kindInfo.color,
+                }}
+              >
+                {trace.kindInfo.label}
+              </span>
+              <span
+                className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]"
+                style={{
+                  backgroundColor: trace.statusInfo.bgColor,
+                  color: trace.statusInfo.color,
+                }}
+              >
+                {trace.statusInfo.label}
               </span>
             </div>
             <h2
               id={titleId}
-              className="mt-2 font-[family-name:var(--font-display)] text-2xl leading-tight"
+              className="mt-2.5 font-[family-name:var(--font-display)] text-2xl leading-tight"
             >
               {analysis?.title ?? node.title}
             </h2>
-            <p className="mt-2 text-[11px] uppercase tracking-[0.12em] text-[var(--muted)]">
-              {node.status} · confidence {node.confidence}
-              {node.agent ? ` · ${node.agent}` : ""}
-            </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {onSetStatus ? (
                 <NodeActions
@@ -94,7 +122,7 @@ export function AnalysisModal({
                     onClose();
                   }}
                 >
-                  + Digress on this node
+                  + Branch / Digress from this node
                 </button>
               ) : null}
             </div>
@@ -103,6 +131,83 @@ export function AnalysisModal({
             Close
           </button>
         </div>
+
+        {/* Plain-English Explainer: What This Node Is & How It Was Made */}
+        <div className="mt-4 grid gap-3 border border-[var(--line)] bg-[var(--paper)] p-3.5 sm:grid-cols-2">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+              What This Node Type Means
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-[var(--ink)]/90">
+              {trace.kindInfo.meaning}
+            </p>
+            <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+              What It Does in the Argument
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-[var(--muted)]">
+              {trace.kindInfo.whatItDoes}
+            </p>
+          </div>
+
+          <div className="border-t border-[var(--line)] pt-3 sm:border-l sm:border-t-0 sm:pl-3.5 sm:pt-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+              How This Output Was Made (Provenance Trace)
+            </p>
+            <ol className="mt-1.5 space-y-2">
+              {trace.steps.map((step) => (
+                <li key={step.step} className="text-xs leading-snug">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-[var(--ink)]">
+                      {step.step}
+                    </span>
+                    <span
+                      className={`text-[10px] uppercase tracking-[0.08em] ${
+                        step.tone === "positive"
+                          ? "text-[#8fbf9a]"
+                          : step.tone === "warning"
+                            ? "text-[#d4a08c]"
+                            : "text-[var(--muted)]"
+                      }`}
+                    >
+                      {step.actor}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+                    {step.detail}
+                  </p>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+
+        {/* Connected Upstream Inputs & Downstream Effects */}
+        {trace.upstream.length > 0 || trace.downstream.length > 0 ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 border border-[var(--line)] bg-[var(--bg)]/50 px-3.5 py-2.5 text-xs">
+            {trace.upstream.map(({ node: up, edgeKind }) => (
+              <button
+                key={`up-${up.id}`}
+                type="button"
+                onClick={() => onOpenNode?.(up.id)}
+                className="node-cite-pill is-interactive"
+              >
+                ← {NODE_KIND_TAXONOMY[up.kind].shortLabel}: {up.title.slice(0, 26)} (
+                {EDGE_KIND_TAXONOMY[edgeKind].label})
+              </button>
+            ))}
+            {trace.downstream.map(({ node: down, edgeKind }) => (
+              <button
+                key={`down-${down.id}`}
+                type="button"
+                onClick={() => onOpenNode?.(down.id)}
+                className="node-cite-pill is-interactive"
+              >
+                {EDGE_KIND_TAXONOMY[edgeKind].label} →{" "}
+                {NODE_KIND_TAXONOMY[down.kind].shortLabel}: {down.title.slice(0, 26)}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <div className="modal-body">
           {seriesChips.length > 0 ? (
@@ -129,7 +234,7 @@ export function AnalysisModal({
                   >
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <span className="font-semibold text-[var(--copper)]">
-                        {chip.seriesTitle || chip.seriesId || chip.label}
+                        Empirical Series: {chip.seriesTitle || chip.seriesId || chip.label}
                       </span>
                       <span className="font-mono text-[11px] text-[#8fbf9a]">
                         Latest: {latest?.value} {chip.units ?? ""} ({latest?.date})
@@ -171,7 +276,7 @@ export function AnalysisModal({
           {node.provenance.some((chip) => chip.spanId) ? (
             <div className="mt-6">
               <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-                MCP spans ({node.provenance.filter((c) => c.spanId).length})
+                Verified Data & Statutory Spans ({node.provenance.filter((c) => c.spanId).length})
               </h3>
               <ul className="mt-2 space-y-2 text-sm">
                 {node.provenance
@@ -185,13 +290,13 @@ export function AnalysisModal({
                           rel="noreferrer"
                           className="text-[var(--copper)] underline-offset-2 hover:underline"
                         >
-                          {chip.label}
+                          {chip.label} ↗
                         </a>
                       ) : (
                         <span>{chip.label}</span>
                       )}
                       <p className="mt-0.5 font-mono text-[11px] text-[var(--muted)]">
-                        {chip.spanId}
+                        Span ID: {chip.spanId}
                       </p>
                     </li>
                   ))}
@@ -202,7 +307,7 @@ export function AnalysisModal({
           {analysis && analysis.citations.length > 0 ? (
             <div className="mt-6">
               <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-                Sources
+                Literature & Official Citations
               </h3>
               <ul className="mt-2 space-y-2 text-sm">
                 {analysis.citations.map((citation) => (
@@ -214,7 +319,7 @@ export function AnalysisModal({
                         rel="noreferrer"
                         className="text-[var(--copper)] underline-offset-2 hover:underline"
                       >
-                        {citation.title}
+                        {citation.title} ↗
                       </a>
                     ) : (
                       <span>{citation.title}</span>
@@ -227,8 +332,6 @@ export function AnalysisModal({
               </ul>
             </div>
           ) : null}
-
-          <p className="mt-6 font-mono text-[10px] text-[var(--muted)]">{node.id}</p>
         </div>
       </div>
     </div>

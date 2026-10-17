@@ -1,35 +1,29 @@
 "use client";
 
+import Link from "next/link";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import { EventLog } from "@/components/studio/EventLog";
-import { NodeCard } from "@/components/studio/NodeCard";
 import { ScopeCard } from "@/components/studio/ScopeCard";
 import { eventNodeId, humanAgent } from "@/lib/ai/event-view";
+import {
+  NODE_KIND_TAXONOMY,
+  NODE_STATUS_TAXONOMY,
+} from "@/lib/ui/node-taxonomy";
 import type { ThreadItem } from "@/components/studio/thread-types";
 import type { DigressionNode } from "@/schemas/digression";
 import type { RunEvent } from "@/schemas/run-event";
 
 const ROLE: Record<string, string> = {
-  scoper: "Locks the Scope Contract before the graph grows.",
-  instrument_parser: "Derives FRED, literature, and statutory queries.",
-  literature: "Places the policy spine & digressions on the map.",
-  series: "Attaches FRED time-series spans.",
-  legal: "Attaches statutory or official policy spans.",
-  macro: "Places macro context & series.",
-  incidence: "Maps who pays and who gains.",
-  critic: "Audits identification & unverified claims.",
-  synthesizer: "Compiles the report from grounded node IDs.",
-  trace_narrator: "Verifies the domain event record.",
+  scoper: "Locked the Scope Contract",
+  instrument_parser: "Selected FRED, OpenAlex & statutory queries",
+  literature: "Mapped policy spine & digression branches",
+  series: "Attached FRED economic time-series data",
+  legal: "Attached statutory & official policy text",
+  macro: "Attached macroeconomic context",
+  incidence: "Mapped distributional winners & losers",
+  critic: "Audited identification & unverified claims",
+  synthesizer: "Compiled the policy findings",
 };
-
-const PIPELINE_STEPS = [
-  { key: "scoper", label: "01 Scope" },
-  { key: "instrument_parser", label: "02 Parser" },
-  { key: "literature", label: "03 Spine" },
-  { key: "mcp", label: "04 MCP Spans" },
-  { key: "critic", label: "05 Critic" },
-  { key: "synthesizer", label: "06 Report" },
-] as const;
 
 type ResponseCardProps = {
   items: ThreadItem[];
@@ -59,19 +53,13 @@ function mcpChips(events: RunEvent[]): Array<{ id: string; label: string; ok: bo
   return chips;
 }
 
-function nodeChips(
-  events: RunEvent[],
-): Array<{ id: string; title: string }> {
+function placedNodeIds(events: RunEvent[]): string[] {
   const seen = new Set<string>();
-  const nodes: Array<{ id: string; title: string }> = [];
   for (const event of events) {
     const id = eventNodeId(event);
-    const title = (event.payload.node as { title?: string } | undefined)?.title;
-    if (!id || seen.has(id) || !title) continue;
-    seen.add(id);
-    nodes.push({ id, title });
+    if (id) seen.add(id);
   }
-  return nodes;
+  return [...seen];
 }
 
 export function ResponseCard({
@@ -82,12 +70,24 @@ export function ResponseCard({
   onOpenNode,
 }: ResponseCardProps) {
   const narrations = items.filter((item) => item.kind === "narration");
-  const seenAgents = new Set<string>(narrations.map((n) => n.agent));
+  const scopeItem = items.find((item) => item.kind === "scope");
   const chips = mcpChips(events);
-  if (chips.length > 0) seenAgents.add("mcp");
-  if (items.some((i) => i.kind === "scope")) seenAgents.add("scoper");
+  const okChips = chips.filter((c) => c.ok);
 
-  const placedNodes = nodeChips(events);
+  const nodeById = new Map(graphNodes.map((n) => [n.id, n]));
+  const turnNodeIds = placedNodeIds(events);
+  const turnNodes =
+    turnNodeIds.length > 0
+      ? turnNodeIds
+          .map((id) => nodeById.get(id))
+          .filter((n): n is DigressionNode => Boolean(n))
+      : graphNodes;
+
+  // Separate primary conclusion (critic / synthesizer / latest narration) from intermediate steps
+  const leadNarration = narrations[narrations.length - 1];
+  const intermediateNarrations =
+    narrations.length > 1 ? narrations.slice(0, -1) : [];
+
   const working = items.find(
     (item) => item.kind === "status" && item.id === "crew-working",
   );
@@ -95,60 +95,34 @@ export function ResponseCard({
     (item) => item.kind === "status" && item.id !== "crew-working",
   );
 
+  const runId = graphNodes[0]?.runId ?? events[0]?.runId ?? "";
+
   return (
     <article className="response-card">
-      <header className="response-head">
-        <div className="flex items-center justify-between gap-2">
+      {/* 1. Primary Output Header */}
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+        <div>
           <p className="response-agent">
-            {finished ? "Crew Turn Digest" : "Crew Running…"}
+            {finished ? "Policy Output & Trace" : "Crew Building Output…"}
           </p>
-          <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
-            {placedNodes.length} nodes · {chips.filter((c) => c.ok).length} MCP spans
-          </span>
+          <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+            {turnNodes.filter((n) => n.status === "supported").length} verified ·{" "}
+            {turnNodes.length} total nodes · {okChips.length} empirical data source
+            {okChips.length === 1 ? "" : "s"}
+          </p>
         </div>
 
-        <div className="crew-step-strip">
-          {PIPELINE_STEPS.map((step) => {
-            const done = finished || seenAgents.has(step.key);
-            return (
-              <span
-                key={step.key}
-                className={`crew-step-badge ${done ? "is-done" : ""}`}
-              >
-                {step.label}
-              </span>
-            );
-          })}
-        </div>
+        {finished && runId ? (
+          <Link
+            href={`/app/draft?run=${runId}`}
+            className="node-action border-[var(--copper)]/60 bg-[var(--copper)]/12 text-[var(--copper)]"
+          >
+            Compile Word / PDF Report →
+          </Link>
+        ) : null}
       </header>
 
-      {items.map((item) => {
-        if (item.kind === "scope") {
-          return <ScopeCard key={item.id} contract={item.contract} />;
-        }
-        if (item.kind === "narration") {
-          return (
-            <section key={item.id} className="response-agent-block">
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="response-agent-mini">{humanAgent(item.agent)}</p>
-                {ROLE[item.agent] ? (
-                  <p className="text-[11px] text-[var(--muted)]">{ROLE[item.agent]}</p>
-                ) : null}
-              </div>
-              <AnalysisBody
-                text={item.text}
-                nodes={graphNodes}
-                onOpenNode={onOpenNode}
-              />
-            </section>
-          );
-        }
-        if (item.kind === "node") {
-          return <NodeCard key={item.id} node={item.node} onOpen={onOpenNode} />;
-        }
-        return null;
-      })}
-
+      {/* Active streaming status */}
       {working?.kind === "status" ? (
         <p className="response-working">{working.text}</p>
       ) : null}
@@ -161,39 +135,120 @@ export function ResponseCard({
         ) : null,
       )}
 
-      {chips.length > 0 ? (
-        <div className="response-mcp">
-          <p className="response-actions-label">Empirical MCP Spans & Tool Calls</p>
-          <div className="response-actions-row">
-            {chips.map((chip) => (
-              <span
-                key={chip.id}
-                className={`mcp-chip ${chip.ok ? "is-ok" : "is-fail"}`}
-              >
-                {chip.label}
-              </span>
-            ))}
+      {/* 2. Key Takeaway / Primary Output */}
+      {leadNarration ? (
+        <section className="response-agent-block">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+              {humanAgent(leadNarration.agent)} —{" "}
+              {ROLE[leadNarration.agent] ?? "Summary"}
+            </span>
+          </div>
+          <AnalysisBody
+            text={leadNarration.text}
+            nodes={graphNodes}
+            onOpenNode={onOpenNode}
+          />
+        </section>
+      ) : null}
+
+      {/* 3. Clear Node Cards: What Was Placed & What Each Node Means */}
+      {turnNodes.length > 0 ? (
+        <div className="space-y-2 border-t border-[var(--line)] pt-3">
+          <div className="flex items-center justify-between">
+            <p className="response-actions-label">
+              Argument Nodes Built (Click Any Node to Trace How It Was Made)
+            </p>
+          </div>
+          <div className="grid gap-1.5">
+            {turnNodes.map((node) => {
+              const kindInfo = NODE_KIND_TAXONOMY[node.kind];
+              const statusInfo = NODE_STATUS_TAXONOMY[node.status];
+              return (
+                <button
+                  key={node.id}
+                  type="button"
+                  onClick={() => onOpenNode(node.id)}
+                  className="flex w-full items-center justify-between gap-3 border border-[var(--line)] bg-[var(--bg)]/55 px-3 py-2 text-left transition hover:border-[var(--copper)]/50 hover:bg-[var(--paper-strong)]"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+                        style={{ color: kindInfo.color }}
+                      >
+                        {kindInfo.shortLabel}
+                      </span>
+                      <span className="text-[10px] text-[var(--muted)]">
+                        · {kindInfo.stage}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 truncate text-xs font-medium text-[var(--ink)]">
+                      {node.title}
+                    </p>
+                  </div>
+                  <span
+                    className="shrink-0 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
+                    style={{
+                      backgroundColor: statusInfo.bgColor,
+                      color: statusInfo.color,
+                    }}
+                  >
+                    {statusInfo.shortLabel}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       ) : null}
 
-      {placedNodes.length > 0 ? (
-        <div className="response-actions">
-          <p className="response-actions-label">Placed & Updated on the Graph</p>
-          <div className="response-actions-row">
-            {placedNodes.map((node) => (
-              <button
-                key={node.id}
-                type="button"
-                className="response-node-btn"
-                onClick={() => onOpenNode(node.id)}
-              >
-                ↗ {node.title}
-              </button>
-            ))}
-          </div>
+      {/* 4. How This Output Was Made: Collapsible Trace of Agent Steps, Data Sources & Scope */}
+      <details className="event-log">
+        <summary className="event-log-summary">
+          <span>How this output was made (Agent steps, data sources & scope)</span>
+          <span className="event-log-count">
+            {intermediateNarrations.length + 1} steps · {okChips.length} data spans
+          </span>
+        </summary>
+
+        <div className="mt-3 space-y-3">
+          {okChips.length > 0 ? (
+            <div>
+              <p className="response-actions-label mb-1.5">
+                Empirical Data & Official Sources Pulled (MCP)
+              </p>
+              <div className="response-actions-row">
+                {okChips.map((chip) => (
+                  <span key={chip.id} className="mcp-chip is-ok">
+                    ✓ {chip.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {scopeItem?.kind === "scope" ? (
+            <ScopeCard contract={scopeItem.contract} />
+          ) : null}
+
+          {intermediateNarrations.map((step) => (
+            <div
+              key={step.id}
+              className="border border-[var(--line)] bg-[var(--bg)]/45 p-3"
+            >
+              <p className="response-agent-mini">
+                {humanAgent(step.agent)} · {ROLE[step.agent] ?? "Step"}
+              </p>
+              <AnalysisBody
+                text={step.text}
+                nodes={graphNodes}
+                onOpenNode={onOpenNode}
+              />
+            </div>
+          ))}
         </div>
-      ) : null}
+      </details>
 
       {finished && events.length > 0 ? (
         <EventLog events={events} onOpenNode={onOpenNode} />

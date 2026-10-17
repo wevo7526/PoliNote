@@ -13,6 +13,12 @@ import {
   collectBibliography,
   extractFredSeries,
 } from "@/components/studio/ReportCharts";
+import {
+  buildClientFallbackReport,
+  downloadPdfReport,
+  downloadWordReport,
+} from "@/lib/reports/export-artifacts";
+import type { CompiledPolicyReport } from "@/lib/reports/report-types";
 import type { ProjectSummary, RunSnapshot, RunSummary } from "@/lib/platform-types";
 import type { NodeAnalysis } from "@/schemas/analysis";
 
@@ -43,7 +49,10 @@ export function ProjectDesk() {
   const [contextMemo, setContextMemo] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [compiled, setCompiled] = useState<CompiledPolicyReport | null>(null);
+  const [compiling, setCompiling] = useState(false);
+  const [exportingWord, setExportingWord] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   useEffect(() => {
     if (!targetId) return;
@@ -61,6 +70,7 @@ export function ProjectDesk() {
         setTitle(payload.project.title);
         setDescription(payload.project.description);
         setContextMemo(payload.project.contextMemo);
+        setCompiled(null);
         setLoading(false);
       }
     })();
@@ -72,6 +82,7 @@ export function ProjectDesk() {
   const project = data?.project ?? activeProject;
   const snapshots = data?.snapshots ?? [];
   const allNodes = snapshots.flatMap((s) => s.nodes);
+  const allEdges = snapshots.flatMap((s) => s.edges);
   const allAnalyses: Record<string, NodeAnalysis> = {};
   for (const snap of snapshots) {
     Object.assign(allAnalyses, snap.analyses);
@@ -95,36 +106,97 @@ export function ProjectDesk() {
     }
   };
 
-  const masterBrief = snapshots
-    .filter((s) => s.nodes.length > 0 || s.draft)
-    .map((s) => {
-      const body =
-        s.draft?.brief ||
-        s.nodes
-          .slice(0, 4)
-          .map((n) => `- **${n.title}**: ${n.body}`)
-          .join("\n");
-      return `## Run: ${s.run.title}\n\n${body}`;
-    })
-    .join("\n\n");
+  const masterBrief =
+    compiled?.executiveSummary
+      ? `## Executive Summary\n\n${compiled.executiveSummary}\n\n${compiled.spineNarrative}`
+      : snapshots
+          .filter((s) => s.nodes.length > 0 || s.draft)
+          .map((s) => {
+            const body =
+              s.draft?.brief ||
+              s.nodes
+                .slice(0, 4)
+                .map((n) => `- **${n.title}**: ${n.body}`)
+                .join("\n");
+            return `## Run: ${s.run.title}\n\n${body}`;
+          })
+          .join("\n\n");
 
-  const handleCopyMasterReport = async () => {
+  const ensureProjectReport = async (): Promise<CompiledPolicyReport> => {
+    if (compiled) return compiled;
+    if (project) {
+      try {
+        const res = await fetch("/api/reports/compile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId: project.id }),
+        });
+        if (res.ok) {
+          const payload = (await res.json()) as { report?: CompiledPolicyReport };
+          if (payload.report) {
+            setCompiled(payload.report);
+            return payload.report;
+          }
+        }
+      } catch {
+        /* fallback below */
+      }
+    }
+    return buildClientFallbackReport({
+      title: `${project?.title ?? "Project"} — Master Policy Report`,
+      projectTitle: project?.title ?? "Policy Research Studio",
+      question: project?.description ?? "Master project synthesis",
+      scope: snapshots.find((s) => s.scope)?.scope ?? null,
+      nodes: allNodes,
+      analyses: allAnalyses,
+      fredSeries,
+      bibliography: bib,
+      briefText: masterBrief,
+    });
+  };
+
+  const handleCompileMaster = async () => {
     if (!project) return;
-    const refs = bib.map(
-      (b) => `[${b.index}] (${b.kind} · ${b.source}) ${b.label}${b.url ? ` — ${b.url}` : ""}`,
-    );
-    const text = [
-      `# Project Master Report: ${project.title}`,
-      project.description,
-      "",
-      masterBrief || "No completed run briefs in this project yet.",
-      "",
-      "## Consolidated Bibliography & MCP Spans",
-      ...refs,
-    ].join("\n");
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 2000);
+    setCompiling(true);
+    try {
+      await ensureProjectReport();
+    } finally {
+      setCompiling(false);
+    }
+  };
+
+  const handleDownloadWord = async () => {
+    setExportingWord(true);
+    try {
+      const reportObj = await ensureProjectReport();
+      await downloadWordReport({
+        report: reportObj,
+        nodes: allNodes,
+        edges: allEdges,
+        scope: snapshots.find((s) => s.scope)?.scope ?? null,
+        fredSeries,
+        bibliography: bib,
+      });
+    } finally {
+      setExportingWord(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setExportingPdf(true);
+    try {
+      const reportObj = await ensureProjectReport();
+      await downloadPdfReport({
+        report: reportObj,
+        nodes: allNodes,
+        edges: allEdges,
+        scope: snapshots.find((s) => s.scope)?.scope ?? null,
+        fredSeries,
+        bibliography: bib,
+      });
+    } finally {
+      setExportingPdf(false);
+    }
   };
 
   if (!project) {
@@ -132,7 +204,9 @@ export function ProjectDesk() {
       <main className="space-page">
         <section className="work-frame p-6">
           <p className="text-sm text-[var(--muted)]">
-            {loading ? "Loading project workspace…" : "Select or create a project in the sidebar."}
+            {loading
+              ? "Loading project workspace…"
+              : "Select or create a project in the sidebar."}
           </p>
         </section>
       </main>
@@ -145,40 +219,50 @@ export function ProjectDesk() {
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-              Project Hub · Shared Context & Master Artifacts
+              Project Hub · Shared Context & Master Report Artifacts
             </p>
             <h1 className="mt-1 font-[family-name:var(--font-display)] text-2xl">
               {project.title}
             </h1>
             <p className="mt-1 text-xs text-[var(--muted)]">
               {snapshots.length} run{snapshots.length === 1 ? "" : "s"} ·{" "}
-              {allNodes.length} total graph nodes ·{" "}
-              {allNodes.filter((n) => n.status === "supported").length} supported ·{" "}
+              {allNodes.length} total nodes ·{" "}
+              {allNodes.filter((n) => n.status === "supported").length} verified ·{" "}
               {fredSeries.length} FRED chart{fredSeries.length === 1 ? "" : "s"} ·{" "}
-              {bib.length} verified source{bib.length === 1 ? "" : "s"}
+              {bib.length} cited source{bib.length === 1 ? "" : "s"}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="composer-send"
+              className="node-action text-[var(--copper)]"
               onClick={() => void newRun(project.id)}
             >
               + New Run in Project
             </button>
             <button
               type="button"
-              className="node-action text-[var(--copper)]"
-              onClick={() => void handleCopyMasterReport()}
+              disabled={compiling}
+              className="node-action border-[var(--copper)]/60 bg-[var(--copper)]/15 text-[var(--copper)]"
+              onClick={() => void handleCompileMaster()}
             >
-              {copied ? "✓ Copied Master Report" : "Export Master Report"}
+              {compiling ? "Compiling Master Report…" : "Compile AI Master Report"}
             </button>
             <button
               type="button"
-              className="node-action"
-              onClick={() => window.print()}
+              disabled={exportingWord}
+              className="composer-send"
+              onClick={() => void handleDownloadWord()}
             >
-              Print / PDF
+              {exportingWord ? "Building .docx…" : "Download Word (.docx)"}
+            </button>
+            <button
+              type="button"
+              disabled={exportingPdf}
+              className="composer-send"
+              onClick={() => void handleDownloadPdf()}
+            >
+              {exportingPdf ? "Building .pdf…" : "Download PDF (.pdf)"}
             </button>
           </div>
         </header>
@@ -275,7 +359,7 @@ export function ProjectDesk() {
                       </span>
                       <span className="font-mono text-[10px] text-[var(--muted)]">
                         {snap.nodes.length} nodes ·{" "}
-                        {snap.nodes.filter((n) => n.status === "supported").length} sup
+                        {snap.nodes.filter((n) => n.status === "supported").length} verified
                       </span>
                     </div>
                     <h3 className="mt-1.5 font-[family-name:var(--font-display)] text-base leading-snug text-[var(--ink)]">
@@ -287,19 +371,13 @@ export function ProjectDesk() {
                         className="node-action text-[var(--copper)]"
                         onClick={() => void selectRun(snap.run.id, "/app/run")}
                       >
-                        Run
+                        Run & Graph
                       </button>
-                      <Link
-                        href={`/app/map?run=${snap.run.id}`}
-                        className="node-action"
-                      >
-                        Map ({snap.nodes.length})
-                      </Link>
                       <Link
                         href={`/app/draft?run=${snap.run.id}`}
                         className="node-action"
                       >
-                        Report
+                        Report & Export
                       </Link>
                     </div>
                   </div>

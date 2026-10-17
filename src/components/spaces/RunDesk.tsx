@@ -223,6 +223,8 @@ export function RunDesk() {
           node={modalNode}
           analysis={modalAnalysis}
           allNodes={snapshot?.nodes ?? []}
+          edges={snapshot?.edges ?? []}
+          events={snapshot?.events ?? []}
           onClose={() => setModalNodeId(null)}
           onOpenNode={setModalNodeId}
           onSetStatus={(nodeId, status) => {

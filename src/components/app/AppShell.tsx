@@ -144,16 +144,16 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <nav
-          className="min-h-0 flex-1 overflow-y-auto px-2 py-2.5"
+          className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2.5"
           aria-label="Projects and runs"
         >
-          <div className="flex items-center justify-between px-2 pb-2">
+          <div className="flex items-center justify-between px-1.5 pb-2">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
               Projects ({projects.length})
             </p>
           </div>
 
-          <ul className="space-y-2.5">
+          <ul className="space-y-2">
             {projects.map((project) => {
               const projectRuns = runs.filter(
                 (run) =>
@@ -192,8 +192,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                       <span className="block truncate font-medium text-[var(--ink)]">
                         {project.title}
                       </span>
-                      <span className="block text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
-                        {projectRuns.length} run{projectRuns.length === 1 ? "" : "s"} · hub & reports
+                      <span className="block text-[10px] text-[var(--muted)]">
+                        {projectRuns.length} run{projectRuns.length === 1 ? "" : "s"} · Project hub
                       </span>
                     </Link>
                     <button
@@ -229,24 +229,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
                   {!isCollapsed ? (
                     <div className="project-runs-tree">
-                      <div className="project-hub-links">
-                        <Link
-                          href={`/app/project?project=${project.id}`}
-                          onClick={() => selectProject(project.id)}
-                          className={`project-sub-link ${
-                            isProjectPage && isSelectedProject ? "is-active" : ""
-                          }`}
-                        >
-                          <span>Project Context & Master Report</span>
-                        </Link>
-                      </div>
-
                       {projectRuns.length === 0 ? (
-                        <p className="px-2.5 py-2 text-[11px] text-[var(--muted)]">
-                          No runs in this project yet.
+                        <p className="px-2 py-1.5 text-[11px] text-[var(--muted)]">
+                          No runs yet. Click + to start one.
                         </p>
                       ) : (
-                        <ul className="space-y-1.5 pt-1">
+                        <ul className="space-y-1">
                           {projectRuns.map((run) => {
                             const active = run.id === activeId;
                             return (
@@ -271,8 +259,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                                     <span className="block truncate text-[13px] font-medium text-[var(--ink)]">
                                       {run.title}
                                     </span>
-                                    <span className="mt-0.5 block text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
-                                      {run.status} · {formatWhen(run.updatedAt)}
+                                    <span className="mt-0.5 block text-[10px] text-[var(--muted)]">
+                                      {formatWhen(run.updatedAt)}
                                     </span>
                                   </button>
                                   <button
@@ -293,44 +281,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                                     ×
                                   </button>
                                 </div>
-
-                                {active ? (
-                                  <ul
-                                    className="run-spaces-nested"
-                                    aria-label={`Desks for ${run.title}`}
-                                  >
-                                    {SPACES.map((space) => {
-                                      const spaceActive =
-                                        pathname === space.href ||
-                                        pathname.startsWith(`${space.href}/`);
-                                      return (
-                                        <li key={space.id}>
-                                          <Link
-                                            href={`${space.href}?run=${run.id}`}
-                                            className={`run-space-pill ${
-                                              spaceActive ? "is-active" : ""
-                                            }`}
-                                          >
-                                            <span>{space.label}</span>
-                                            {space.id === "map" && snapshot ? (
-                                              <span className="run-space-count">
-                                                {snapshot.nodes.length}
-                                              </span>
-                                            ) : null}
-                                            {space.id === "sources" && snapshot ? (
-                                              <span className="run-space-count">
-                                                {snapshot.nodes.reduce(
-                                                  (acc, n) => acc + n.evidenceSpanIds.length,
-                                                  0,
-                                                )}
-                                              </span>
-                                            ) : null}
-                                          </Link>
-                                        </li>
-                                      );
-                                    })}
-                                  </ul>
-                                ) : null}
                               </li>
                             );
                           })}
@@ -353,7 +303,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <>
                   <Link
                     href={`/app/project?project=${activeProject.id}`}
-                    className="truncate text-[11px] uppercase tracking-[0.14em] text-[var(--copper)] hover:underline"
+                    className="truncate text-[11px] font-medium text-[var(--copper)] hover:underline"
                   >
                     {activeProject.title}
                   </Link>
@@ -365,7 +315,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </span>
               {snapshot?.invalidatedNodeIds && snapshot.invalidatedNodeIds.length > 0 ? (
                 <span className="invalidated-pill">
-                  {snapshot.invalidatedNodeIds.length} invalidated by scope edit
+                  {snapshot.invalidatedNodeIds.length} node(s) need re-check
                 </span>
               ) : null}
             </div>
@@ -379,9 +329,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                     key={space.id}
                     href={`${space.href}?run=${activeId}`}
                     className={`workspace-tab ${spaceActive ? "is-active" : ""}`}
+                    title={space.blurb}
                   >
                     <span>{space.label}</span>
-                    {space.id === "map" && snapshot ? (
+                    {space.id === "map" && snapshot && snapshot.nodes.length > 0 ? (
                       <span className="workspace-tab-badge">{snapshot.nodes.length}</span>
                     ) : null}
                   </Link>

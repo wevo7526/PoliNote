@@ -140,6 +140,8 @@ export function MapDesk() {
           node={selected}
           analysis={modalAnalysis}
           allNodes={nodes}
+          edges={edges}
+          events={snapshot?.events ?? []}
           onClose={() => setModalOpen(false)}
           onOpenNode={(id) => setSelectedId(id)}
           onSetStatus={onSetStatus}

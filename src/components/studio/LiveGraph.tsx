@@ -14,7 +14,12 @@ import {
   layoutPolicyGraph,
   nodeLane,
 } from "@/lib/ai/layout";
-import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
+import {
+  EDGE_KIND_TAXONOMY,
+  NODE_KIND_TAXONOMY,
+  NODE_STATUS_TAXONOMY,
+} from "@/lib/ui/node-taxonomy";
+import type { DigressionEdge, DigressionNode, DigressionNodeKind } from "@/schemas/digression";
 
 export type GraphFilterMode =
   | "all"
@@ -32,25 +37,16 @@ type LiveGraphProps = {
   onQuickPrompt?: (prompt: string) => void;
 };
 
-const KIND_FILL: Record<DigressionNode["kind"], string> = {
-  claim: "#d4b483",
-  mechanism: "#8fbfb0",
-  constraint: "#c9a27a",
-  evidence: "#9bb4d4",
-  counterfactual: "#b5a4d4",
-  incidence: "#d4a08c",
-  uncertainty: "#a8a29a",
-  fork: "#d48ca0",
-};
-
-const EDGE_SHORT_LABEL: Record<DigressionEdge["kind"], string> = {
-  supports: "supports",
-  attacks: "attacks",
-  depends_on: "depends on",
-  elaborates: "elaborates",
-  alternatives: "alt fork",
-  causal: "causal →",
-};
+const GUIDE_ORDER: DigressionNodeKind[] = [
+  "constraint",
+  "mechanism",
+  "claim",
+  "evidence",
+  "incidence",
+  "counterfactual",
+  "fork",
+  "uncertainty",
+];
 
 function edgeStroke(kind: DigressionEdge["kind"]): {
   color: string;
@@ -70,50 +66,6 @@ function edgeStroke(kind: DigressionEdge["kind"]): {
     return { color: "#d4b483", marker: "url(#arrow-copper)" };
   }
   return { color: "rgba(243,238,228,0.52)", marker: "url(#arrow-muted)" };
-}
-
-function statusStyle(
-  node: DigressionNode,
-  fill: string,
-  selected: boolean,
-): {
-  stroke: string;
-  width: number;
-  dash?: string;
-  badgeFill: string;
-  badgeText: string;
-} {
-  if (node.status === "supported") {
-    return {
-      stroke: "#8fbf9a",
-      width: selected ? 2.2 : 1.6,
-      badgeFill: "rgba(143,191,154,0.18)",
-      badgeText: "#8fbf9a",
-    };
-  }
-  if (node.status === "contested") {
-    return {
-      stroke: "#d4a08c",
-      width: selected ? 2.2 : 1.6,
-      badgeFill: "rgba(212,160,140,0.18)",
-      badgeText: "#d4a08c",
-    };
-  }
-  if (node.status === "pruned") {
-    return {
-      stroke: "rgba(154,146,132,0.45)",
-      width: 1,
-      dash: "4 4",
-      badgeFill: "rgba(154,146,132,0.14)",
-      badgeText: "#9a9284",
-    };
-  }
-  return {
-    stroke: selected ? "#d4b483" : fill,
-    width: selected ? 2.0 : 1.15,
-    badgeFill: "rgba(243,238,228,0.08)",
-    badgeText: "#9a9284",
-  };
 }
 
 function wrapTwoLines(text: string, maxPerLine = 31): [string, string | null] {
@@ -148,7 +100,6 @@ function computeEdgeGeometry(from: DigressionNode, to: DigressionNode): {
   const dx = toCx - fromCx;
   const dy = toCy - fromCy;
 
-  // Primarily vertical connection (e.g. spine parent <-> digression band or same column)
   if (Math.abs(dx) < 80 || Math.abs(dy) > Math.abs(dx) * 0.72) {
     const goingDown = dy >= 0;
     const x1 = fromCx;
@@ -163,7 +114,6 @@ function computeEdgeGeometry(from: DigressionNode, to: DigressionNode): {
     };
   }
 
-  // Primarily horizontal connection across swimlanes
   const goingRight = dx >= 0;
   const x1 = goingRight ? from.position.x + NODE_W : from.position.x;
   const y1 = fromCy;
@@ -188,7 +138,7 @@ const STARTER_PROMPTS = [
     tag: "Housing & Land Use",
     title: "By-right transit-oriented upzoning mandate",
     prompt:
-      "Evaluate a state mandate allowing 6-story multifamly housing by-right within 0.5 miles of commuter rail stations: effects on rents, construction permits, and municipal fiscal incidence.",
+      "Evaluate a state mandate allowing 6-story multifamily housing by-right within 0.5 miles of commuter rail stations: effects on rents, construction permits, and municipal fiscal incidence.",
   },
   {
     tag: "Industrial & Climate",
@@ -207,21 +157,20 @@ export function LiveGraph({
   onQuickPrompt,
 }: LiveGraphProps) {
   const [filter, setFilter] = useState<GraphFilterMode>("all");
-  const [showPruned, setShowPruned] = useState(true);
-  const [showLegend, setShowLegend] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   const visibleNodes = useMemo(() => {
     return nodes.filter((node) => {
-      if (!showPruned && node.status === "pruned") return false;
+      if (node.status === "pruned") return false;
       if (filter === "spine") return nodeLane(node.kind) !== "digression";
       if (filter === "digression") return nodeLane(node.kind) === "digression";
       if (filter === "supported") return node.status === "supported";
       if (filter === "contested") return node.status === "contested";
       return true;
     });
-  }, [nodes, filter, showPruned]);
+  }, [nodes, filter]);
 
   const layout = useMemo(
     () => layoutPolicyGraph(visibleNodes, edges),
@@ -251,6 +200,11 @@ export function LiveGraph({
   }, [nodeKey, nodes]);
 
   const focusNodeId = hoveredId ?? selectedId;
+  const focusNode = useMemo(
+    () => (focusNodeId ? nodes.find((n) => n.id === focusNodeId) ?? null : null),
+    [focusNodeId, nodes],
+  );
+
   const connectedIds = useMemo(() => {
     if (!focusNodeId) return null;
     const set = new Set<string>([focusNodeId]);
@@ -267,15 +221,15 @@ export function LiveGraph({
         <div className="veil-idle pointer-events-none absolute left-1/2 top-1/2 h-[320px] w-[320px] -translate-x-1/2 -translate-y-1/2" />
         <div className="relative z-10 max-w-xl text-center">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--copper)]">
-            {busy ? "Crew assembling policy spine…" : "Policy Digression Blueprint"}
+            {busy ? "Building Policy Argument Map…" : "How the Policy Argument Map Works"}
           </p>
           <h3 className="mt-2 font-[family-name:var(--font-display)] text-2xl tracking-tight text-[var(--ink)]">
             {busy
               ? "Locking scope contract and placing spine nodes"
-              : "Every policy question maps onto 5 spine stages + digressions"}
+              : "Every policy question is traced across 5 clear stages"}
           </h3>
           <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">
-            01 Instrument → 02 Mechanism → 03 Claim / Target → 04 Identification → 05 Incidence, with Forks, Counterfactuals, and Uncertainties branched below.
+            <strong>01 Policy Rule</strong> → <strong>02 Mechanism</strong> (how it works) → <strong>03 Core Finding</strong> (expected effect) → <strong>04 Empirical Data</strong> (FRED & studies) → <strong>05 Who Pays / Gains</strong>, with <strong>What-If Branches & Risks</strong> mapped below.
           </p>
         </div>
 
@@ -295,7 +249,7 @@ export function LiveGraph({
                   {item.title}
                 </span>
                 <span className="mt-2 block text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
-                  Run digression →
+                  Map this policy →
                 </span>
               </button>
             ))}
@@ -327,14 +281,14 @@ export function LiveGraph({
               { id: "all", label: `All (${nodes.length})` },
               {
                 id: "spine",
-                label: `Spine (${nodes.filter((n) => nodeLane(n.kind) !== "digression").length})`,
+                label: `Main Spine (${nodes.filter((n) => nodeLane(n.kind) !== "digression").length})`,
               },
               {
                 id: "digression",
-                label: `Digressions (${nodes.filter((n) => nodeLane(n.kind) === "digression").length})`,
+                label: `Branches (${nodes.filter((n) => nodeLane(n.kind) === "digression").length})`,
               },
-              { id: "supported", label: `Supported (${supportedCount})` },
-              { id: "contested", label: `Contested (${contestedCount})` },
+              { id: "supported", label: `Verified (${supportedCount})` },
+              { id: "contested", label: `Needs Proof (${contestedCount})` },
             ] as const
           ).map((tab) => (
             <button
@@ -375,41 +329,96 @@ export function LiveGraph({
           </button>
           <button
             type="button"
-            className={`graph-tool-btn ${!showPruned ? "is-active" : ""}`}
-            onClick={() => setShowPruned((p) => !p)}
+            className={`graph-tool-btn ${showGuide ? "is-active" : ""}`}
+            onClick={() => setShowGuide((g) => !g)}
           >
-            {showPruned ? "Hide pruned" : "Show pruned"}
-          </button>
-          <button
-            type="button"
-            className={`graph-tool-btn ${showLegend ? "is-active" : ""}`}
-            onClick={() => setShowLegend((l) => !l)}
-          >
-            Legend
+            {showGuide ? "Hide Node Guide" : "? What Node Types Mean"}
           </button>
         </div>
       </div>
 
-      {showLegend ? (
-        <div className="graph-legend-bar">
-          <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--copper)]">
-            Status & Edges:
-          </span>
-          <span className="legend-item">
-            <span className="legend-dot bg-[#8fbf9a]" /> Supported (≥1 MCP span)
-          </span>
-          <span className="legend-item">
-            <span className="legend-dot bg-[#d4a08c]" /> Contested (needs span / critic flag)
-          </span>
-          <span className="legend-item">
-            <span className="legend-dot bg-[#d4b483]" /> Supports / Causal edge
-          </span>
-          <span className="legend-item">
-            <span className="legend-dot bg-[#d46a6a]" /> Attacks edge
-          </span>
-          <span className="legend-item">
-            <span className="legend-dot bg-[#b5a4d4]" /> Alternative / Counterfactual
-          </span>
+      {/* Interactive Node Type Guide Drawer */}
+      {showGuide ? (
+        <div className="border-b border-[var(--line)] bg-[#0e1015] px-4 py-3">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+              Node Type Guide — What Each Box Means & What It Does
+            </p>
+            <span className="text-[11px] text-[var(--muted)]">
+              Click any node on the map to inspect its full data & provenance trace
+            </span>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {GUIDE_ORDER.map((kind) => {
+              const info = NODE_KIND_TAXONOMY[kind];
+              return (
+                <div
+                  key={kind}
+                  className="border border-[var(--line)] bg-[var(--paper)] p-2.5"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: info.color }}
+                    />
+                    <span
+                      className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+                      style={{ color: info.color }}
+                    >
+                      {info.shortLabel}
+                    </span>
+                    <span className="ml-auto text-[9px] text-[var(--muted)]">
+                      {info.stage}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] font-medium text-[var(--ink)]">
+                    {info.label}
+                  </p>
+                  <p className="mt-0.5 text-[10.5px] leading-snug text-[var(--muted)]">
+                    {info.meaning}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Live Hover / Selection Explainer Strip */}
+      {focusNode ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] bg-[#111319] px-4 py-2 text-xs">
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: NODE_KIND_TAXONOMY[focusNode.kind].color }}
+            />
+            <span
+              className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em]"
+              style={{ color: NODE_KIND_TAXONOMY[focusNode.kind].color }}
+            >
+              {NODE_KIND_TAXONOMY[focusNode.kind].label}:
+            </span>
+            <span className="truncate font-medium text-[var(--ink)]">
+              {focusNode.title}
+            </span>
+            <span className="hidden truncate text-[11px] text-[var(--muted)] xl:inline">
+              — {NODE_KIND_TAXONOMY[focusNode.kind].whatItDoes}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2 text-[11px]">
+            <span className="text-[var(--muted)]">
+              Created by <strong className="text-[var(--ink)]">{humanAgent(focusNode.agent)}</strong>
+            </span>
+            <span
+              className="px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em]"
+              style={{
+                backgroundColor: NODE_STATUS_TAXONOMY[focusNode.status].bgColor,
+                color: NODE_STATUS_TAXONOMY[focusNode.status].color,
+              }}
+            >
+              {NODE_STATUS_TAXONOMY[focusNode.status].shortLabel}
+            </span>
+          </div>
         </div>
       ) : null}
 
@@ -491,7 +500,7 @@ export function LiveGraph({
                   fill="#d4b483"
                   fontSize={10}
                   fontWeight={600}
-                  letterSpacing={1.5}
+                  letterSpacing={1.4}
                   style={{ textTransform: "uppercase" }}
                 >
                   {LANE_LABEL[lane]}
@@ -508,7 +517,7 @@ export function LiveGraph({
                 <text
                   x={x}
                   y={HEADER_Y + 15}
-                  fill="rgba(154,146,132,0.78)"
+                  fill="rgba(154,146,132,0.82)"
                   fontSize={9.5}
                 >
                   {LANE_SUBTITLE[lane]}
@@ -543,10 +552,10 @@ export function LiveGraph({
             fill="#d4b483"
             fontSize={10}
             fontWeight={600}
-            letterSpacing={1.5}
+            letterSpacing={1.4}
             style={{ textTransform: "uppercase" }}
           >
-            {LANE_LABEL.digression}
+            Digression Branches — What-If Baselines, Design Forks & Key Risks
           </text>
           <text
             x={LANE_X.incidence + NODE_W}
@@ -558,7 +567,7 @@ export function LiveGraph({
             {layout.digressionCount} branch{layout.digressionCount === 1 ? "" : "es"}
           </text>
 
-          {/* Edges + Semantic Midpoint Pills */}
+          {/* Edges + Plain-English Semantic Pills */}
           {edges.map((edge) => {
             const from = byId.get(edge.sourceId);
             const to = byId.get(edge.targetId);
@@ -573,8 +582,9 @@ export function LiveGraph({
 
             const geom = computeEdgeGeometry(from, to);
             const stroke = edgeStroke(edge.kind);
-            const labelText = edge.label || EDGE_SHORT_LABEL[edge.kind];
-            const pillW = Math.max(46, labelText.length * 5.6 + 12);
+            const edgeInfo = EDGE_KIND_TAXONOMY[edge.kind];
+            const labelText = edge.label || edgeInfo.label;
+            const pillW = Math.max(52, labelText.length * 5.6 + 12);
 
             return (
               <g
@@ -596,7 +606,7 @@ export function LiveGraph({
                   width={pillW}
                   height={15}
                   rx={2}
-                  fill="rgba(11,12,15,0.9)"
+                  fill="rgba(11,12,15,0.92)"
                   stroke={stroke.color}
                   strokeWidth={0.7}
                 />
@@ -606,8 +616,7 @@ export function LiveGraph({
                   textAnchor="middle"
                   fill={stroke.color}
                   fontSize={8.5}
-                  letterSpacing={0.8}
-                  style={{ textTransform: "uppercase" }}
+                  letterSpacing={0.6}
                 >
                   {labelText.slice(0, 16)}
                 </text>
@@ -615,11 +624,12 @@ export function LiveGraph({
             );
           })}
 
-          {/* Rich Multi-Line Node Cards */}
+          {/* Clear, Plain-English Node Cards */}
           {layout.nodes.map((node) => {
             const selected = node.id === selectedId;
-            const fill = KIND_FILL[node.kind];
-            const style = statusStyle(node, fill, selected);
+            const kindInfo = NODE_KIND_TAXONOMY[node.kind];
+            const statusInfo = NODE_STATUS_TAXONOMY[node.status];
+            const fill = kindInfo.color;
             const clickable = Boolean(onOpenNode);
             const arriving = fresh.has(node.id);
             const pruned = node.status === "pruned";
@@ -627,8 +637,8 @@ export function LiveGraph({
             const [line1, line2] = wrapTwoLines(node.title, 31);
             const spanCount = node.evidenceSpanIds.length;
             const roleLabel = humanAgent(node.agent);
-            const statusLabel = node.status.toUpperCase();
-            const statusW = Math.max(54, statusLabel.length * 5.8 + 12);
+            const statusText = statusInfo.shortLabel;
+            const statusW = Math.max(58, statusText.length * 5.8 + 14);
 
             return (
               <g
@@ -657,23 +667,22 @@ export function LiveGraph({
                   width={NODE_W}
                   height={NODE_H}
                   rx={3}
-                  fill={selected ? "rgba(212,180,131,0.14)" : "rgba(13,15,20,0.92)"}
-                  stroke={style.stroke}
-                  strokeWidth={style.width}
-                  strokeDasharray={style.dash}
+                  fill={selected ? "rgba(212,180,131,0.14)" : "rgba(13,15,20,0.94)"}
+                  stroke={selected ? "#d4b483" : statusInfo.color}
+                  strokeWidth={selected ? 2.1 : 1.35}
                 />
 
                 {/* Left accent bar */}
                 <rect
                   x={node.position.x}
                   y={node.position.y}
-                  width={3.5}
+                  width={4}
                   height={NODE_H}
                   rx={1.5}
                   fill={fill}
                 />
 
-                {/* Top header: kind + status pill */}
+                {/* Top header: Plain-English Node Type + Plain-English Verification Status */}
                 <circle
                   cx={node.position.x + 14}
                   cy={node.position.y + 16}
@@ -682,34 +691,32 @@ export function LiveGraph({
                 />
                 <text
                   x={node.position.x + 23}
-                  y={node.position.y + 19}
+                  y={node.position.y + 19.5}
                   fill={fill}
-                  fontSize={9}
+                  fontSize={9.5}
                   fontWeight={600}
-                  letterSpacing={1.3}
-                  style={{ textTransform: "uppercase" }}
+                  letterSpacing={0.8}
                 >
-                  {node.kind}
+                  {kindInfo.shortLabel}
                 </text>
 
                 <rect
                   x={node.position.x + NODE_W - statusW - 8}
                   y={node.position.y + 8}
                   width={statusW}
-                  height={15}
+                  height={16}
                   rx={2}
-                  fill={style.badgeFill}
+                  fill={statusInfo.bgColor}
                 />
                 <text
                   x={node.position.x + NODE_W - statusW / 2 - 8}
-                  y={node.position.y + 18.5}
+                  y={node.position.y + 19}
                   textAnchor="middle"
-                  fill={style.badgeText}
-                  fontSize={8}
+                  fill={statusInfo.color}
+                  fontSize={8.5}
                   fontWeight={600}
-                  letterSpacing={1}
                 >
-                  {statusLabel}
+                  {statusText}
                 </text>
 
                 {/* Two-line title */}
@@ -745,7 +752,7 @@ export function LiveGraph({
                   </text>
                 )}
 
-                {/* Bottom metadata footer: role + confidence + MCP spans */}
+                {/* Bottom trace footer: How it was made */}
                 <line
                   x1={node.position.x + 12}
                   y1={node.position.y + 66}
@@ -758,27 +765,23 @@ export function LiveGraph({
                   x={node.position.x + 14}
                   y={node.position.y + 79}
                   fill="#9a9284"
-                  fontSize={8.5}
-                  letterSpacing={0.9}
-                  style={{ textTransform: "uppercase" }}
+                  fontSize={9}
                 >
-                  {roleLabel} · {node.confidence}
+                  By {roleLabel}
                 </text>
                 <text
                   x={node.position.x + NODE_W - 10}
                   y={node.position.y + 79}
                   textAnchor="end"
                   fill={spanCount > 0 ? "#8fbf9a" : "#9a9284"}
-                  fontSize={8.5}
+                  fontSize={9}
                   fontWeight={spanCount > 0 ? 600 : 400}
-                  letterSpacing={0.8}
-                  style={{ textTransform: "uppercase" }}
                 >
                   {spanCount > 0
-                    ? `✓ ${spanCount} MCP span${spanCount === 1 ? "" : "s"}`
+                    ? `✓ ${spanCount} Empirical Source${spanCount === 1 ? "" : "s"}`
                     : node.provenance.length > 0
-                      ? `${node.provenance.length} web lead${node.provenance.length === 1 ? "" : "s"}`
-                      : "unverified"}
+                      ? `${node.provenance.length} Research Lead${node.provenance.length === 1 ? "" : "s"}`
+                      : "Click to trace →"}
                 </text>
               </g>
             );

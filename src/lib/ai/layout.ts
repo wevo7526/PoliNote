@@ -33,22 +33,21 @@ export const LANE_X: Record<SpineLane, number> = {
 };
 
 export const LANE_LABEL: Record<PolicyLane, string> = {
-  instrument: "01 · Instrument",
+  instrument: "01 · Policy Rule",
   mechanism: "02 · Mechanism",
-  claim: "03 · Claim / target",
-  identification: "04 · Identification",
-  incidence: "05 · Incidence",
-  digression: "Digression branches (Forks · Counterfactuals · Uncertainties)",
+  claim: "03 · Core Finding",
+  identification: "04 · Empirical Data",
+  incidence: "05 · Who Pays / Gains",
+  digression: "Digression Branches (What-If Baselines · Design Forks · Key Risks)",
 };
 
 export const LANE_SUBTITLE: Record<SpineLane, string> = {
-  instrument: "Statute, tariff, tax, or rule",
-  mechanism: "Transmission channel",
-  claim: "Core effect & benchmark",
-  collector_fallback: "",
-  identification: "Empirical design & spans",
-  incidence: "Who pays & who gains",
-} as Record<SpineLane, string>;
+  instrument: "Law, tariff, tax, or rule",
+  mechanism: "How the policy works",
+  claim: "Expected effect & benchmark",
+  identification: "FRED series, studies & proof",
+  incidence: "Distributional winners & losers",
+};
 
 const KIND_LANE: Record<DigressionNodeKind, PolicyLane> = {
   constraint: "instrument",
