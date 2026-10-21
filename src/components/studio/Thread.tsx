@@ -4,13 +4,17 @@ import type { RefObject } from "react";
 import { ResponseCard } from "./ResponseCard";
 import type { ThreadItem } from "./thread-types";
 import { groupThreadTurns } from "@/lib/ui/thread-turns";
+import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionNode } from "@/schemas/digression";
 import type { RunEvent } from "@/schemas/run-event";
+import type { ScopeContract } from "@/schemas/scope-contract";
 
 type ThreadProps = {
   items: ThreadItem[];
   events?: RunEvent[];
   nodes?: DigressionNode[];
+  analyses?: Record<string, NodeAnalysis>;
+  scope?: ScopeContract | null;
   onOpenNode: (id: string) => void;
   listRef: RefObject<HTMLDivElement | null>;
 };
@@ -19,6 +23,8 @@ export function Thread({
   items,
   events = [],
   nodes = [],
+  analyses = {},
+  scope = null,
   onOpenNode,
   listRef,
 }: ThreadProps) {
@@ -45,9 +51,12 @@ export function Thread({
               ) : null}
               {hasResponse ? (
                 <ResponseCard
+                  question={turn.user?.text ?? scope?.question ?? ""}
                   items={turn.items}
                   events={turn.events}
                   nodes={nodes}
+                  analyses={analyses}
+                  scope={scope}
                   finished={turn.finished}
                   onOpenNode={onOpenNode}
                 />

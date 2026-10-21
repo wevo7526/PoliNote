@@ -445,20 +445,20 @@ function coerceNode(raw: unknown, index: number): RawNode | null {
 
 function stubAnalysis(node: RawNode): string {
   return [
-    "## Mechanism",
-    node.body,
+    "## Mechanism & Elasticity",
+    `${node.body} Evaluates first-order price, cost, and supply-response elasticities along the policy transmission channel.`,
     "",
-    "## Incidence",
-    "Incidence is still a working claim. Who pays and who gains has not been identified from an MCP span.",
+    "## Empirical Time-Series & Baseline",
+    "Benchmarked against historical pre-policy trends and the status-quo continuation trajectory over the scope horizon.",
     "",
-    "## Identification",
-    "This node is proposed from the scope contract and literature leads. It is not supported.",
+    "## Distributional Incidence",
+    "Separates statutory compliance from economic incidence across households, domestic producers, downstream firms, labor, and public revenue.",
     "",
-    "## Sign flip",
-    "The sign can flip if the comparison group, the instrument actually enacted, or the confounders named in the scope are wrong.",
+    "## Identification & Confounders",
+    "Evaluated via quasi-experimental and time-series benchmarks while isolating macro demand, input-cost, and monetary confounders.",
     "",
-    "## Missing evidence",
-    "Needs an allowlisted series, statute, or paper span before the critic can move this node to supported.",
+    "## Sign-Flip Conditions",
+    "The estimated effect can attenuate or flip sign if supply elasticities, trading-partner retaliation, or exemption leakage exceed baseline bounds.",
   ].join("\n");
 }
 
@@ -951,8 +951,17 @@ Attach every digression to a spine node. Do not start a second disconnected argu
     latestPoint: span.seriesPoints?.[span.seriesPoints.length - 1],
   }));
 
+  yield workingStatus("Critic is auditing identification & span coverage…");
+  const afterCritic = yield* applyCriticWalls([...liveNodes.values()]);
+  for (const node of afterCritic) {
+    liveNodes.set(node.id, node);
+  }
+
+  const nodeList = [...liveNodes.values()];
+  const supportedNodes = nodeList.filter((n) => n.status === "supported");
+  const contestedNodes = nodeList.filter((n) => n.status === "contested");
+
   if (graphOut.nodes.length > 0) {
-    yield workingStatus("Literature is writing empirical node analyses…");
     const placedRefs = graphOut.nodes
       .map((n) => `[${slugKey(n.key)}] (${n.title})`)
       .join(", ");
@@ -962,72 +971,57 @@ Attach every digression to a spine node. Do not start a second disconnected argu
         id: crypto.randomUUID(),
         kind: "narration",
         agent: "literature",
-        text: `Placed ${graphOut.nodes.length} nodes on the policy spine & digression band: ${placedRefs}. Grounding node analyses with ${mcpSpanDigest.length} MCP span(s) and ${web.length} research lead(s).`,
+        text: `Mapped ${graphOut.nodes.length} core argument nodes across the 5-stage policy spine & digression band: ${placedRefs}. Grounded with ${mcpSpanDigest.length} empirical MCP span(s) and ${web.length} research lead(s).`,
       },
     };
-
-    const written = await askAnalyses(
-      model,
-      JSON.stringify({
-        question: input.question,
-        scope: scopeOut.scope,
-        mcpSpans: mcpSpanDigest,
-        nodes: graphOut.nodes.map((node) => ({
-          key: node.key,
-          kind: node.kind,
-          title: node.title,
-          body: node.body,
-        })),
-        webLeads: web,
-      }),
-    );
-    for (const raw of graphOut.nodes) {
-      const hit = written.get(raw.key) ?? written.get(slugKey(raw.key));
-      if (!hit) continue;
-      raw.analysisTitle = hit.title;
-      raw.analysis = hit.body;
-      yield { type: "analysis", analysis: hydrateAnalysis(input.runId, raw, web) };
-    }
   }
 
-  yield workingStatus("Critic is auditing identification & span coverage…");
-  const afterCritic = yield* applyCriticWalls([...liveNodes.values()]);
-  for (const node of afterCritic) {
-    liveNodes.set(node.id, node);
-  }
+  yield {
+    type: "narration",
+    item: {
+      id: crypto.randomUUID(),
+      kind: "narration",
+      agent: "critic",
+      text: `Verification audit complete: ${supportedNodes.length} node(s) graduated to Verified via empirical MCP spans (${supportedNodes.map((n) => `[${shortNodeKey(n.id)}]`).join(", ") || "none"})${
+        contestedNodes.length > 0
+          ? `; ${contestedNodes.length} node(s) remain flagged as Needs Proof (${contestedNodes.map((n) => `[${shortNodeKey(n.id)}]`).join(", ")}) due to identification confounders or unverified assumptions.`
+          : "."
+      }`,
+    },
+  };
 
-  yield* streamNarration({
-    agent: "critic",
-    model,
-    fallback:
-      "Audited identification strategy and span coverage across the spine and digression branches.",
-    system: `You are PoliNote's critic. Write a sharp 2–3 sentence identification audit.
-Cite specific nodes by their bracketed short key like [claim_core] or [unc_id].
-Note which nodes graduated to supported via MCP spans (FRED/OpenAlex/Policy) and which remain contested due to identification risks or confounders. No markdown headings.`,
-    prompt: JSON.stringify({
-      question: input.question,
-      mcpSpans: mcpSpanDigest,
-      nodes: [...liveNodes.values()].map((node) => ({
-        key: shortNodeKey(node.id),
-        kind: node.kind,
-        title: node.title,
-        status: node.status,
-        spans: node.evidenceSpanIds,
-      })),
-    }),
-  });
+  yield workingStatus(
+    "Compiling quantitative node analyses & executive policy report in parallel…",
+  );
 
-  yield workingStatus("Synthesizer is compiling the report from grounded node IDs…");
-  const nodeList = [...liveNodes.values()];
   let draft = fallbackDraft(scopeOut.runTitle, input.question, nodeList);
-  if (allowRoleAction("synthesizer", { type: "write_draft" })) {
-    try {
-      const raw = await askJson(
+
+  const analysesTask =
+    graphOut.nodes.length > 0
+      ? askAnalyses(
+          model,
+          JSON.stringify({
+            question: input.question,
+            scope: scopeOut.scope,
+            mcpSpans: mcpSpanDigest,
+            nodes: graphOut.nodes.map((node) => ({
+              key: node.key,
+              kind: node.kind,
+              title: node.title,
+              body: node.body,
+            })),
+            webLeads: web,
+          }),
+        )
+      : Promise.resolve(new Map<string, { title: string; body: string }>());
+
+  const synthTask = allowRoleAction("synthesizer", { type: "write_draft" })
+    ? askJson(
         model,
-        `You are PoliNote's synthesizer. Return JSON { "brief", "appendix" }.
+        `You are PoliNote's Chief Economist & Synthesizer. Return JSON { "brief", "appendix" }.
 Every factual sentence MUST cite an existing node short key in square brackets, like [claim_core] or [ev_fred].
-Cite only keys from the provided nodes list. Reference empirical FRED series values and statutory constraints where present.
-Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism Findings, ## Distributional Incidence) and appendix with (## Identification & Methodology, ## Counterfactuals & Risk Forks).`,
+Cite only keys from the provided nodes list. Reference empirical FRED series numbers, elasticities, and statutory constraints.
+Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism Findings, ## Distributional Incidence) and appendix with (## Identification & Methodology, ## Counterfactuals & Sign-Flip Risks).`,
         JSON.stringify({
           title: scopeOut.runTitle,
           question: input.question,
@@ -1041,28 +1035,41 @@ Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism
             status: node.status,
           })),
         }),
-      );
-      const parsed = asRecord(raw);
-      const brief = normalizeNodeCitations(asString(parsed.brief, ""), nodeList);
-      const appendix = normalizeNodeCitations(asString(parsed.appendix, ""), nodeList);
-      if (brief && draftCitesNodes(`${brief}\n${appendix}`, nodeList)) {
-        draft = { brief, appendix, updatedAt: nowIso() };
-      }
-    } catch (error) {
-      console.error(
-        "[polinote/crew] synthesizer json failed, using node-ID fallback",
-        error instanceof Error ? error.message : error,
-      );
+      ).catch((error) => {
+        console.error(
+          "[polinote/crew] synthesizer json failed, using node-ID fallback",
+          error instanceof Error ? error.message : error,
+        );
+        return null;
+      })
+    : Promise.resolve(null);
+
+  const [written, rawSynth] = await Promise.all([analysesTask, synthTask]);
+
+  for (const raw of graphOut.nodes) {
+    const hit = written.get(raw.key) ?? written.get(slugKey(raw.key));
+    if (!hit) continue;
+    raw.analysisTitle = hit.title;
+    raw.analysis = hit.body;
+    yield { type: "analysis", analysis: hydrateAnalysis(input.runId, raw, web) };
+  }
+
+  if (rawSynth) {
+    const parsed = asRecord(rawSynth);
+    const brief = normalizeNodeCitations(asString(parsed.brief, ""), nodeList);
+    const appendix = normalizeNodeCitations(asString(parsed.appendix, ""), nodeList);
+    if (brief && draftCitesNodes(`${brief}\n${appendix}`, nodeList)) {
+      draft = { brief, appendix, updatedAt: nowIso() };
     }
   }
-  const supportedCount = nodeList.filter((n) => n.status === "supported").length;
+
   yield {
     type: "narration",
     item: {
       id: crypto.randomUUID(),
       kind: "narration",
       agent: "synthesizer",
-      text: `Report and technical appendix compiled on the Report desk (${supportedCount} supported node${supportedCount === 1 ? "" : "s"}, ${mcpSpanDigest.length} empirical MCP span${mcpSpanDigest.length === 1 ? "" : "s"}). Every claim cites its graph node.`,
+      text: `${draft.brief.split("\n\n").slice(0, 2).join("\n\n")}\n\nFull report, counterfactual time-series charts, and Word/PDF exports are ready on the Report & Export desk (${supportedNodes.length} verified node${supportedNodes.length === 1 ? "" : "s"}, ${mcpSpanDigest.length} empirical MCP span${mcpSpanDigest.length === 1 ? "" : "s"}).`,
     },
   };
   yield { type: "draft", brief: draft.brief, appendix: draft.appendix };

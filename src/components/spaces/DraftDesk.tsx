@@ -6,13 +6,18 @@ import { useWorkspace } from "@/components/app/WorkspaceProvider";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import { AnalysisModal } from "@/components/studio/AnalysisModal";
 import {
+  CounterfactualTrajectoryChart,
+  DistributionalIncidenceBarChart,
+  EconomicScorecardBanner,
   FredSeriesChartCard,
+  ImpulseResponseChart,
   IncidenceTradeoffMatrix,
   SpineCoverageChart,
   VerifiedBibliographyTable,
   collectBibliography,
   extractFredSeries,
 } from "@/components/studio/ReportCharts";
+import { buildRunEconomicModel } from "@/lib/economics/engine";
 import {
   buildClientFallbackReport,
   downloadPdfReport,
@@ -54,6 +59,17 @@ export function DraftDesk() {
     () =>
       collectBibliography(snapshot?.nodes ?? [], snapshot?.analyses ?? {}),
     [snapshot?.nodes, snapshot?.analyses],
+  );
+
+  const econModel = useMemo(
+    () =>
+      buildRunEconomicModel({
+        question: snapshot?.scope?.question ?? snapshot?.run.title ?? "",
+        scope: snapshot?.scope ?? null,
+        nodes: snapshot?.nodes ?? [],
+        fredSeries,
+      }),
+    [snapshot?.scope, snapshot?.run.title, snapshot?.nodes, fredSeries],
   );
 
   if (!activeId || !snapshot) {
@@ -162,6 +178,7 @@ export function DraftDesk() {
         report: reportObj,
         nodes: snapshot.nodes,
         edges: snapshot.edges,
+        analyses: snapshot.analyses,
         scope: snapshot.scope,
         fredSeries,
         bibliography: bib,
@@ -179,6 +196,7 @@ export function DraftDesk() {
         report: reportObj,
         nodes: snapshot.nodes,
         edges: snapshot.edges,
+        analyses: snapshot.analyses,
         scope: snapshot.scope,
         fredSeries,
         bibliography: bib,
@@ -230,7 +248,7 @@ export function DraftDesk() {
             </h1>
             <p className="mt-1 text-xs text-[var(--muted)]">
               {snapshot.nodes.filter((n) => n.status === "supported").length} verified findings ·{" "}
-              {fredSeries.length} empirical chart{fredSeries.length === 1 ? "" : "s"} ·{" "}
+              {fredSeries.length + 3} embedded economic charts ·{" "}
               {bib.length} cited source{bib.length === 1 ? "" : "s"}
             </p>
           </div>
@@ -271,15 +289,25 @@ export function DraftDesk() {
         </header>
 
         <div className="space-y-6 p-5">
-          {/* 1. Figures & Empirical Charts with AI Interpretations */}
+          {/* Quantitative Economic Scorecard */}
+          {snapshot.nodes.length > 0 ? (
+            <EconomicScorecardBanner scorecard={econModel.scorecard} />
+          ) : null}
+
+          {/* 1. Figures, Time-Series Projections & Empirical Charts */}
           {snapshot.nodes.length > 0 ? (
             <section>
               <div className="mb-2.5 flex items-center justify-between">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-                  1. Figures & Empirical Charts (Included in Word & PDF Downloads)
+                  1. Time-Series Projections, Dynamic Impulse Responses & FRED Charts (Embedded in Word & PDF)
                 </p>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
+                <CounterfactualTrajectoryChart series={econModel.counterfactual} />
+                <ImpulseResponseChart series={econModel.impulseResponse} />
+                <DistributionalIncidenceBarChart
+                  items={econModel.incidenceDistribution}
+                />
                 <SpineCoverageChart nodes={snapshot.nodes} />
                 {fredSeries.map((series) => (
                   <FredSeriesChartCard key={series.key} series={series} />
@@ -393,6 +421,7 @@ export function DraftDesk() {
 
           <IncidenceTradeoffMatrix
             nodes={snapshot.nodes}
+            analyses={snapshot.analyses}
             onOpenNode={setModalNodeId}
           />
 

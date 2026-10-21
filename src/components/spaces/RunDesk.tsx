@@ -200,6 +200,8 @@ export function RunDesk() {
             items={snapshot?.items ?? []}
             events={snapshot?.events ?? []}
             nodes={snapshot?.nodes ?? []}
+            analyses={snapshot?.analyses ?? {}}
+            scope={snapshot?.scope ?? null}
             onOpenNode={setModalNodeId}
             listRef={listRef}
           />

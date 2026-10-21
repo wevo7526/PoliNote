@@ -30,6 +30,11 @@ import {
   nodeLane,
   type PolicyLane,
 } from "@/lib/ai/layout";
+import {
+  buildRunEconomicModel,
+  type CounterfactualSeries,
+  type ImpulseResponseSeries,
+} from "@/lib/economics/engine";
 import type {
   CompiledPolicyReport,
   FullReportBundle,
@@ -578,16 +583,247 @@ function makeTableCell(
 }
 
 /**
+ * Renders the Counterfactual Time-Series Projection Fan Chart (Historical 2021-2025 + Baseline vs. Policy 2026-2030) to a high-res PNG canvas.
+ */
+function renderCounterfactualPng(series: CounterfactualSeries): RenderedPng {
+  const width = 1200;
+  const height = 460;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.fillStyle = "#111319";
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "rgba(143,191,154,0.45)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, width - 2, height - 2);
+
+  const pts = series.points;
+  const allVals = pts.flatMap((p) => [p.baseline, p.policy, p.lowerBand, p.upperBand]);
+  const minV = Math.min(...allVals) - 1.5;
+  const maxV = Math.max(...allVals) + 1.5;
+  const range = maxV - minV || 1;
+
+  ctx.fillStyle = "#d4b483";
+  ctx.font = "bold 14px Segoe UI, sans-serif";
+  ctx.fillText("COUNTERFACTUAL TIME-SERIES PROJECTION (2021–2030, 90% CI FAN)", 36, 40);
+
+  ctx.fillStyle = "#f3eee4";
+  ctx.font = "bold 22px Georgia, serif";
+  ctx.fillText(series.title.slice(0, 72), 36, 72);
+
+  ctx.fillStyle = "#9a9284";
+  ctx.font = "13px Segoe UI, sans-serif";
+  ctx.fillText(`${series.subtitle} · ${series.units}`, 36, 96);
+
+  const net = series.netPolicyEffectPct;
+  ctx.fillStyle = net >= 0 ? "#8fbf9a" : "#d4a08c";
+  ctx.font = "bold 24px Consolas, monospace";
+  ctx.fillText(
+    `Net Policy Effect: ${net >= 0 ? `+${net}%` : `${net}%`} vs. Baseline`,
+    width - 420,
+    72,
+  );
+
+  const padL = 84;
+  const padR = 48;
+  const padT = 124;
+  const padB = 60;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+
+  const xOf = (idx: number) => padL + (idx / Math.max(1, pts.length - 1)) * plotW;
+  const yOf = (val: number) => padT + plotH - ((val - minV) / range) * plotH;
+
+  // Gridlines
+  ctx.strokeStyle = "rgba(243,238,228,0.12)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const gy = padT + (i / 4) * plotH;
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(width - padR, gy);
+    ctx.stroke();
+
+    const val = maxV - (i / 4) * range;
+    ctx.fillStyle = "#9a9284";
+    ctx.font = "12px Consolas, monospace";
+    ctx.fillText(val.toFixed(1), 24, gy + 4);
+  }
+
+  // Intervention line
+  const intIdx = Math.max(0, pts.findIndex((p) => p.isForecast));
+  const intX = xOf(intIdx);
+  ctx.strokeStyle = "rgba(212,180,131,0.5)";
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(intX, padT);
+  ctx.lineTo(intX, padT + plotH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#d4b483";
+  ctx.font = "bold 12px Segoe UI, sans-serif";
+  ctx.fillText(`Policy Enacted (${series.interventionPeriod}) →`, intX + 8, padT + 16);
+
+  // 90% CI Fan
+  const forecastStart = Math.max(0, intIdx - 1);
+  ctx.beginPath();
+  for (let i = forecastStart; i < pts.length; i += 1) {
+    const x = xOf(i);
+    const y = yOf(pts[i]!.upperBand);
+    if (i === forecastStart) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  for (let i = pts.length - 1; i >= forecastStart; i -= 1) {
+    ctx.lineTo(xOf(i), yOf(pts[i]!.lowerBand));
+  }
+  ctx.closePath();
+  ctx.fillStyle = "rgba(143,191,154,0.18)";
+  ctx.fill();
+
+  // Baseline dashed curve
+  ctx.strokeStyle = "#9a9284";
+  ctx.lineWidth = 2.2;
+  ctx.setLineDash([7, 5]);
+  ctx.beginPath();
+  pts.forEach((p, idx) => {
+    const x = xOf(idx);
+    const y = yOf(p.baseline);
+    if (idx === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Policy solid curve
+  ctx.strokeStyle = "#8fbf9a";
+  ctx.lineWidth = 3.2;
+  ctx.beginPath();
+  pts.forEach((p, idx) => {
+    const x = xOf(idx);
+    const y = yOf(p.policy);
+    if (idx === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  pts.forEach((p, idx) => {
+    ctx.fillStyle = "#c8c2b6";
+    ctx.font = "12px Consolas, monospace";
+    ctx.fillText(p.period, xOf(idx) - 14, height - 20);
+  });
+
+  const dataUrl = canvas.toDataURL("image/png");
+  return { dataUrl, bytes: dataUrlToBytes(dataUrl), width, height };
+}
+
+/**
+ * Renders the Dynamic Impulse-Response Curves Chart (Q+1 to Q+8) to a high-res PNG canvas.
+ */
+function renderImpulseResponsePng(series: ImpulseResponseSeries): RenderedPng {
+  const width = 1200;
+  const height = 460;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.fillStyle = "#111319";
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "rgba(212,180,131,0.4)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, width - 2, height - 2);
+
+  const pts = series.points;
+  const allVals = [
+    0,
+    ...pts.flatMap((p) => [p.priceChannel, p.outputChannel, p.employmentFiscalChannel]),
+  ];
+  const minV = Math.min(...allVals) - 1.2;
+  const maxV = Math.max(...allVals) + 1.2;
+  const range = maxV - minV || 1;
+
+  ctx.fillStyle = "#d4b483";
+  ctx.font = "bold 14px Segoe UI, sans-serif";
+  ctx.fillText("DYNAMIC IMPULSE-RESPONSE FUNCTIONS (Q+1 TO Q+8)", 36, 40);
+
+  ctx.fillStyle = "#f3eee4";
+  ctx.font = "bold 22px Georgia, serif";
+  ctx.fillText(series.title, 36, 72);
+
+  ctx.fillStyle = "#9a9284";
+  ctx.font = "13px Segoe UI, sans-serif";
+  ctx.fillText(
+    `${series.channelLabels.price} (Copper) · ${series.channelLabels.output} (Green) · ${series.channelLabels.employmentFiscal} (Blue)`,
+    36,
+    96,
+  );
+
+  const padL = 84;
+  const padR = 48;
+  const padT = 124;
+  const padB = 60;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+
+  const xOf = (idx: number) => padL + (idx / Math.max(1, pts.length - 1)) * plotW;
+  const yOf = (val: number) => padT + plotH - ((val - minV) / range) * plotH;
+
+  const zeroY = yOf(0);
+  ctx.strokeStyle = "rgba(243,238,228,0.28)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(padL, zeroY);
+  ctx.lineTo(width - padR, zeroY);
+  ctx.stroke();
+
+  const drawCurve = (pick: (p: (typeof pts)[number]) => number, color: string) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    pts.forEach((p, idx) => {
+      const x = xOf(idx);
+      const y = yOf(pick(p));
+      if (idx === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  };
+
+  drawCurve((p) => p.priceChannel, "#d4b483");
+  drawCurve((p) => p.outputChannel, "#8fbf9a");
+  drawCurve((p) => p.employmentFiscalChannel, "#9bb4d4");
+
+  pts.forEach((p, idx) => {
+    ctx.fillStyle = "#c8c2b6";
+    ctx.font = "12px Consolas, monospace";
+    ctx.fillText(p.horizon, xOf(idx) - 12, height - 20);
+  });
+
+  const dataUrl = canvas.toDataURL("image/png");
+  return { dataUrl, bytes: dataUrlToBytes(dataUrl), width, height };
+}
+
+/**
  * Generates and downloads a native Microsoft Word (.docx) Policy Report with embedded charts & tables.
  */
 export async function downloadWordReport(bundle: FullReportBundle): Promise<void> {
-  const { report, nodes, edges, fredSeries, bibliography } = bundle;
+  const { report, nodes, edges, analyses = {}, scope, fredSeries, bibliography } = bundle;
   const activeNodes = nodes.filter((n) => n.status !== "pruned");
+  const econModel = buildRunEconomicModel({
+    question: scope?.question ?? report.title,
+    scope,
+    nodes: activeNodes,
+    fredSeries,
+  });
+  const counterfactualPng = renderCounterfactualPng(econModel.counterfactual);
+  const impulsePng = renderImpulseResponsePng(econModel.impulseResponse);
   const spinePng = renderSpineCoveragePng(activeNodes);
   const mapPng = renderArgumentMapPng(activeNodes, edges);
   const fredPngs = fredSeries.map((s, idx) => ({
     series: s,
-    png: renderFredSeriesPng(s, idx + 2),
+    png: renderFredSeriesPng(s, idx + 4),
     note: report.figureNotes[idx + 1],
   }));
 
@@ -711,13 +947,13 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
     );
   }
 
-  // 3. Embedded Figures & Empirical Charts
+  // 3. Embedded Figures, Time-Series Projections & Empirical Charts
   children.push(
     new Paragraph({
       heading: HeadingLevel.HEADING_1,
       children: [
         new TextRun({
-          text: "3. Visual Figures, Argument Map & Empirical FRED Charts",
+          text: "3. Visual Figures, Time-Series Projections & Empirical Charts",
           bold: true,
           size: 30,
           color: "111319",
@@ -725,6 +961,60 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
         }),
       ],
       spacing: { before: 320, after: 160 },
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [
+        new ImageRun({
+          data: counterfactualPng.bytes,
+          transformation: { width: 580, height: 222 },
+          type: "png",
+        }),
+      ],
+      spacing: { after: 80 },
+    }),
+    new Paragraph({
+      children: [
+        new TextRun({
+          text: `Figure 1 — ${econModel.counterfactual.title}: `,
+          bold: true,
+          size: 19,
+          color: "111319",
+        }),
+        new TextRun({
+          text: `${econModel.counterfactual.subtitle}. Net policy effect by 2030: ${econModel.scorecard.primaryMetricDelta} (${econModel.scorecard.elasticitySummary}).`,
+          size: 19,
+          color: "444754",
+        }),
+      ],
+      spacing: { after: 220 },
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [
+        new ImageRun({
+          data: impulsePng.bytes,
+          transformation: { width: 580, height: 222 },
+          type: "png",
+        }),
+      ],
+      spacing: { after: 80 },
+    }),
+    new Paragraph({
+      children: [
+        new TextRun({
+          text: `Figure 2 — ${econModel.impulseResponse.title}: `,
+          bold: true,
+          size: 19,
+          color: "111319",
+        }),
+        new TextRun({
+          text: `${econModel.impulseResponse.subtitle}. Peak response: ${econModel.scorecard.realOutputDelta} (${econModel.scorecard.timeToPeak}).`,
+          size: 19,
+          color: "444754",
+        }),
+      ],
+      spacing: { after: 220 },
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -740,7 +1030,7 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
     new Paragraph({
       children: [
         new TextRun({
-          text: "Policy Argument Knowledge Graph: ",
+          text: "Figure 3 — Policy Argument Knowledge Graph Blueprint: ",
           bold: true,
           size: 19,
           color: "111319",
@@ -768,7 +1058,7 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
     new Paragraph({
       children: [
         new TextRun({
-          text: `${report.figureNotes[0]?.figureLabel ?? "Figure 1"} — ${report.figureNotes[0]?.title ?? "Spine Coverage"}: `,
+          text: `Figure 4 — ${report.figureNotes[0]?.title ?? "Spine Coverage"}: `,
           bold: true,
           size: 19,
           color: "111319",
@@ -835,6 +1125,7 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
   for (const node of activeNodes) {
     const kindInfo = NODE_KIND_TAXONOMY[node.kind];
     const statusInfo = NODE_STATUS_TAXONOMY[node.status];
+    const deepBody = analyses[node.id]?.body;
     children.push(
       new Paragraph({
         heading: HeadingLevel.HEADING_2,
@@ -870,14 +1161,34 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
         children: [
           new TextRun({
             text: node.body,
+            bold: true,
             size: 21,
             color: "1E2028",
             font: "Calibri",
           }),
         ],
-        spacing: { after: 140 },
+        spacing: { after: 100 },
       }),
     );
+
+    if (deepBody) {
+      for (const block of stripMarkdown(deepBody).split(/\n\n+/)) {
+        if (!block.trim()) continue;
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: block.trim(),
+                size: 20,
+                color: "2C2F3A",
+                font: "Calibri",
+              }),
+            ],
+            spacing: { after: 110 },
+          }),
+        );
+      }
+    }
   }
 
   // 5. Distributional Incidence Matrix
@@ -1030,13 +1341,21 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
  * Generates and downloads a native multi-page PDF (.pdf) Policy Report with embedded charts & tables.
  */
 export async function downloadPdfReport(bundle: FullReportBundle): Promise<void> {
-  const { report, nodes, edges, fredSeries, bibliography } = bundle;
+  const { report, nodes, edges, analyses = {}, scope, fredSeries, bibliography } = bundle;
   const activeNodes = nodes.filter((n) => n.status !== "pruned");
+  const econModel = buildRunEconomicModel({
+    question: scope?.question ?? report.title,
+    scope,
+    nodes: activeNodes,
+    fredSeries,
+  });
+  const counterfactualPng = renderCounterfactualPng(econModel.counterfactual);
+  const impulsePng = renderImpulseResponsePng(econModel.impulseResponse);
   const spinePng = renderSpineCoveragePng(activeNodes);
   const mapPng = renderArgumentMapPng(activeNodes, edges);
   const fredPngs = fredSeries.map((s, idx) => ({
     series: s,
-    png: renderFredSeriesPng(s, idx + 2),
+    png: renderFredSeriesPng(s, idx + 4),
     note: report.figureNotes[idx + 1],
   }));
 
@@ -1158,14 +1477,26 @@ export async function downloadPdfReport(bundle: FullReportBundle): Promise<void>
   };
 
   embedPngFigure(
+    counterfactualPng,
+    `Figure 1 — ${econModel.counterfactual.title}`,
+    `${econModel.counterfactual.subtitle}. Net policy effect by 2030: ${econModel.scorecard.primaryMetricDelta} (${econModel.scorecard.elasticitySummary}).`,
+  );
+
+  embedPngFigure(
+    impulsePng,
+    `Figure 2 — ${econModel.impulseResponse.title}`,
+    `${econModel.impulseResponse.subtitle}. Peak response: ${econModel.scorecard.realOutputDelta} (${econModel.scorecard.timeToPeak}).`,
+  );
+
+  embedPngFigure(
     mapPng,
-    "Policy Argument Knowledge Graph Blueprint",
+    "Figure 3 — Policy Argument Knowledge Graph Blueprint",
     "Visual trace across 01 Policy Rule, 02 Mechanism, 03 Core Finding, 04 Empirical Data, 05 Distributional Impact, and Digression Branches.",
   );
 
   embedPngFigure(
     spinePng,
-    `${report.figureNotes[0]?.figureLabel ?? "Figure 1"} — ${report.figureNotes[0]?.title ?? "Spine Coverage"}`,
+    `Figure 4 — ${report.figureNotes[0]?.title ?? "Spine Coverage"}`,
     `${report.figureNotes[0]?.caption ?? ""} ${report.figureNotes[0]?.interpretation ?? ""}`,
   );
 
@@ -1182,6 +1513,7 @@ export async function downloadPdfReport(bundle: FullReportBundle): Promise<void>
   for (const node of activeNodes) {
     const kindInfo = NODE_KIND_TAXONOMY[node.kind];
     const statusInfo = NODE_STATUS_TAXONOMY[node.status];
+    const deepBody = analyses[node.id]?.body;
     ensureSpace(58);
     writeParagraph(
       `${kindInfo.stage} · ${node.title} (${statusInfo.label})`,
@@ -1191,7 +1523,12 @@ export async function downloadPdfReport(bundle: FullReportBundle): Promise<void>
       `What this node is (${kindInfo.label}): ${kindInfo.whatItDoes}`,
       { size: 9.5, color: [154, 107, 50] },
     );
-    writeParagraph(node.body, { size: 10 });
+    writeParagraph(node.body, { bold: true, size: 10 });
+    if (deepBody) {
+      for (const block of deepBody.split(/\n\n+/)) {
+        writeParagraph(block, { size: 9.8, color: [48, 52, 64] });
+      }
+    }
   }
 
   // 5. Methodology & How Output Was Made

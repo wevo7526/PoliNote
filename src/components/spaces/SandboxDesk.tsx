@@ -3,7 +3,13 @@
 import { useState } from "react";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
-import { FredSeriesChartCard, type ExtractedSeries } from "@/components/studio/ReportCharts";
+import {
+  CounterfactualTrajectoryChart,
+  FredSeriesChartCard,
+  ImpulseResponseChart,
+  type ExtractedSeries,
+} from "@/components/studio/ReportCharts";
+import { buildRunEconomicModel } from "@/lib/economics/engine";
 import {
   SANDBOX_PERSONAS,
   type SandboxPersona,
@@ -294,17 +300,38 @@ export function SandboxDesk() {
                   </button>
                 </div>
 
-                {/* Live FRED Macro Regime Charts for this turn */}
+                {/* Live FRED Macro Regime + Counterfactual Time-Series Charts */}
                 {turn.charts.length > 0 ? (
-                  <div className="mt-4">
-                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
-                      Live FRED Macro Series Examined by {turn.persona?.name ?? "Persona"}
+                  <div className="mt-4 space-y-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+                      Empirical FRED Time-Series & Regime Projections Examined by{" "}
+                      {turn.persona?.name ?? "Persona"}
                     </p>
                     <div className="grid gap-3 lg:grid-cols-3">
                       {turn.charts.map((series) => (
                         <FredSeriesChartCard key={series.key} series={series} />
                       ))}
                     </div>
+                    {(() => {
+                      const sim = buildRunEconomicModel({
+                        question: turn.prompt,
+                        scope: null,
+                        nodes: [],
+                        fredSeries: turn.charts,
+                      });
+                      return (
+                        <div className="grid gap-3 lg:grid-cols-2">
+                          <CounterfactualTrajectoryChart
+                            series={sim.counterfactual}
+                            compact
+                          />
+                          <ImpulseResponseChart
+                            series={sim.impulseResponse}
+                            compact
+                          />
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : null}
 

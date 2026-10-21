@@ -4,6 +4,11 @@ import { useEffect, useId, useMemo, useRef } from "react";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import { NodeActions } from "@/components/studio/NodeActions";
 import {
+  CounterfactualTrajectoryChart,
+  extractFredSeries,
+} from "@/components/studio/ReportCharts";
+import { buildNodeTimeSeries } from "@/lib/economics/engine";
+import {
   EDGE_KIND_TAXONOMY,
   NODE_KIND_TAXONOMY,
   buildNodeProvenanceTrace,
@@ -64,6 +69,16 @@ export function AnalysisModal({
 
   const seriesChips = node.provenance.filter(
     (chip) => chip.seriesPoints && chip.seriesPoints.length >= 2,
+  );
+
+  const nodeTrajectory = useMemo(
+    () =>
+      buildNodeTimeSeries(
+        node,
+        null,
+        extractFredSeries(allNodes.length > 0 ? allNodes : [node]),
+      ),
+    [node, allNodes],
   );
 
   return (
@@ -210,62 +225,62 @@ export function AnalysisModal({
         ) : null}
 
         <div className="modal-body">
-          {seriesChips.length > 0 ? (
-            <div className="mb-5 space-y-3">
-              {seriesChips.map((chip, idx) => {
-                const pts = chip.seriesPoints ?? [];
-                const values = pts.map((p) => p.value);
-                const minV = Math.min(...values);
-                const maxV = Math.max(...values);
-                const range = maxV - minV || 1;
-                const w = 520;
-                const h = 96;
-                const coords = pts.map((pt, i) => {
-                  const x = 12 + (i / Math.max(1, pts.length - 1)) * (w - 24);
-                  const y = h - 16 - ((pt.value - minV) / range) * (h - 32);
-                  return `${x.toFixed(1)},${y.toFixed(1)}`;
-                });
-                const latest = pts[pts.length - 1];
-                const earliest = pts[0];
-                return (
-                  <div
-                    key={`${chip.spanId ?? idx}`}
-                    className="border border-[var(--line)] bg-[var(--paper)] p-3"
-                  >
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="font-semibold text-[var(--copper)]">
-                        Empirical Series: {chip.seriesTitle || chip.seriesId || chip.label}
-                      </span>
-                      <span className="font-mono text-[11px] text-[#8fbf9a]">
-                        Latest: {latest?.value} {chip.units ?? ""} ({latest?.date})
-                      </span>
-                    </div>
-                    <svg
-                      viewBox={`0 0 ${w} ${h}`}
-                      className="mt-2 h-24 w-full"
-                      role="img"
-                      aria-label={`Time series for ${chip.seriesId ?? chip.label}`}
-                    >
-                      <polyline
-                        fill="none"
-                        stroke="#8fbf9a"
-                        strokeWidth="2"
-                        points={coords.join(" ")}
-                      />
-                    </svg>
-                    <div className="flex justify-between font-mono text-[10px] text-[var(--muted)]">
-                      <span>
-                        {earliest?.date} (min {minV.toFixed(2)})
-                      </span>
-                      <span>
-                        {latest?.date} (max {maxV.toFixed(2)})
-                      </span>
-                    </div>
+          <div className="mb-5 space-y-3">
+            <CounterfactualTrajectoryChart series={nodeTrajectory} compact />
+
+            {seriesChips.map((chip, idx) => {
+              const pts = chip.seriesPoints ?? [];
+              const values = pts.map((p) => p.value);
+              const minV = Math.min(...values);
+              const maxV = Math.max(...values);
+              const range = maxV - minV || 1;
+              const w = 520;
+              const h = 96;
+              const coords = pts.map((pt, i) => {
+                const x = 12 + (i / Math.max(1, pts.length - 1)) * (w - 24);
+                const y = h - 16 - ((pt.value - minV) / range) * (h - 32);
+                return `${x.toFixed(1)},${y.toFixed(1)}`;
+              });
+              const latest = pts[pts.length - 1];
+              const earliest = pts[0];
+              return (
+                <div
+                  key={`${chip.spanId ?? idx}`}
+                  className="border border-[var(--line)] bg-[var(--paper)] p-3"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-[var(--copper)]">
+                      Empirical Series: {chip.seriesTitle || chip.seriesId || chip.label}
+                    </span>
+                    <span className="font-mono text-[11px] text-[#8fbf9a]">
+                      Latest: {latest?.value} {chip.units ?? ""} ({latest?.date})
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          ) : null}
+                  <svg
+                    viewBox={`0 0 ${w} ${h}`}
+                    className="mt-2 h-24 w-full"
+                    role="img"
+                    aria-label={`Time series for ${chip.seriesId ?? chip.label}`}
+                  >
+                    <polyline
+                      fill="none"
+                      stroke="#8fbf9a"
+                      strokeWidth="2"
+                      points={coords.join(" ")}
+                    />
+                  </svg>
+                  <div className="flex justify-between font-mono text-[10px] text-[var(--muted)]">
+                    <span>
+                      {earliest?.date} (min {minV.toFixed(2)})
+                    </span>
+                    <span>
+                      {latest?.date} (max {maxV.toFixed(2)})
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
           <AnalysisBody
             text={analysis?.body ?? node.body}

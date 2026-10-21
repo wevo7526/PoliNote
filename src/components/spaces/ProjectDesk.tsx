@@ -6,13 +6,18 @@ import { useSearchParams } from "next/navigation";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import {
+  CounterfactualTrajectoryChart,
+  DistributionalIncidenceBarChart,
+  EconomicScorecardBanner,
   FredSeriesChartCard,
+  ImpulseResponseChart,
   IncidenceTradeoffMatrix,
   SpineCoverageChart,
   VerifiedBibliographyTable,
   collectBibliography,
   extractFredSeries,
 } from "@/components/studio/ReportCharts";
+import { buildRunEconomicModel } from "@/lib/economics/engine";
 import {
   buildClientFallbackReport,
   downloadPdfReport,
@@ -173,6 +178,7 @@ export function ProjectDesk() {
         report: reportObj,
         nodes: allNodes,
         edges: allEdges,
+        analyses: allAnalyses,
         scope: snapshots.find((s) => s.scope)?.scope ?? null,
         fredSeries,
         bibliography: bib,
@@ -190,6 +196,7 @@ export function ProjectDesk() {
         report: reportObj,
         nodes: allNodes,
         edges: allEdges,
+        analyses: allAnalyses,
         scope: snapshots.find((s) => s.scope)?.scope ?? null,
         fredSeries,
         bibliography: bib,
@@ -388,17 +395,33 @@ export function ProjectDesk() {
 
           {/* Aggregated Project Charts & Graphs */}
           {allNodes.length > 0 ? (
-            <section>
-              <p className="mb-2.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-                Project-Wide Empirical Charts & Spine Coverage
-              </p>
-              <div className="grid gap-4 lg:grid-cols-2">
-                <SpineCoverageChart nodes={allNodes} />
-                {fredSeries.map((series) => (
-                  <FredSeriesChartCard key={series.key} series={series} />
-                ))}
-              </div>
-            </section>
+            (() => {
+              const econ = buildRunEconomicModel({
+                question: project.description || project.title,
+                scope: snapshots.find((s) => s.scope)?.scope ?? null,
+                nodes: allNodes,
+                fredSeries,
+              });
+              return (
+                <section className="space-y-4">
+                  <EconomicScorecardBanner scorecard={econ.scorecard} />
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
+                    Project-Wide Time-Series Projections, Impulse Responses & Empirical Charts
+                  </p>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <CounterfactualTrajectoryChart series={econ.counterfactual} />
+                    <ImpulseResponseChart series={econ.impulseResponse} />
+                    <DistributionalIncidenceBarChart
+                      items={econ.incidenceDistribution}
+                    />
+                    <SpineCoverageChart nodes={allNodes} />
+                    {fredSeries.map((series) => (
+                      <FredSeriesChartCard key={series.key} series={series} />
+                    ))}
+                  </div>
+                </section>
+              );
+            })()
           ) : null}
 
           {/* Compiled Master Brief Across Runs */}
@@ -411,7 +434,7 @@ export function ProjectDesk() {
             </section>
           ) : null}
 
-          <IncidenceTradeoffMatrix nodes={allNodes} />
+          <IncidenceTradeoffMatrix nodes={allNodes} analyses={allAnalyses} />
 
           <VerifiedBibliographyTable nodes={allNodes} analyses={allAnalyses} />
         </div>

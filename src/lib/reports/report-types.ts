@@ -1,4 +1,5 @@
 import type { ExtractedSeries, BibliographyEntry } from "@/components/studio/ReportCharts";
+import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
 import type { ScopeContract } from "@/schemas/scope-contract";
 
@@ -42,6 +43,7 @@ export type FullReportBundle = {
   report: CompiledPolicyReport;
   nodes: DigressionNode[];
   edges: DigressionEdge[];
+  analyses?: Record<string, NodeAnalysis>;
   scope: ScopeContract | null;
   fredSeries: ExtractedSeries[];
   bibliography: BibliographyEntry[];

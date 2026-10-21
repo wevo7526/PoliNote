@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/brand/polinote-banner.png" alt="PoliNote — Policy Digression Workbench" width="100%" />
+  <img src="docs/brand/polinote-banner.png" alt="PoliNote — Economic Analysis Engine & Policy Digression Workbench" width="100%" />
 </div>
 
 <br />
@@ -8,98 +8,100 @@
 
 # PoliNote
 
-**A workbench for economic policy digression — not a chatbot that answers in paragraphs.**
+**An economic analysis engine and policy digression workbench.**
 
-You bring a real instrument, a real target, and a horizon. PoliNote grows an *argument*: a scoped contract, a living graph of claims and mechanisms, and a written analysis behind every node.
+Bring a real policy instrument, a target population, and a time horizon. PoliNote locks a formal **Scope Contract**, builds a 5-stage **Policy Argument Graph** with explicit counterfactual branches, attaches empirical time-series and literature spans via **MCP**, models **Baseline vs. Policy Trajectories** and **Distributional Incidence**, and compiles publication-ready **Word (`.docx`)** and **PDF (`.pdf`)** reports with embedded figures.
 
 </div>
 
 ---
 
-## What this is
+## Why PoliNote Exists
 
-PoliNote is a **policy digression workbench**. It exists because serious questions — a tariff, a carbon border, a housing upzone — do not resolve into a single chat reply. They fork. Incidence is not the same as the statutory target. Identification is not a vibe. A brief that cannot point at a node is just rhetoric.
+Serious economic policy questions — a 25% tariff on battery-electric vehicles, a by-right transit upzoning mandate, a carbon border adjustment on steel, or a semiconductor investment tax credit — do not resolve into a single paragraph. They fork across legal constraints, price pass-through elasticities, supply-chain substitution, and regional or household incidence.
 
-The product is the **digression**: a directed graph of `claim`, `mechanism`, `constraint`, `evidence`, `counterfactual`, `incidence`, `uncertainty`, and `fork`, grown under a **Scope Contract** that must name instrument, target, identification strategy, and horizon before generation is treated as ready.
-
-Chat is intake and steering. It is not the artifact.
+PoliNote turns policy analysis into a **structured, verifiable artifact**:
+1. **Every claim has a place on the Policy Spine** (`01 Policy Rule` → `02 Mechanism` → `03 Core Finding` → `04 Empirical Data` → `05 Who Pays / Gains`) or in the **Digression Band** (`What-If Baselines`, `Design Forks`, and `Key Risks`).
+2. **Every output is quantitatively and empirically grounded**, pairing live **FRED** macroeconomic and sector series with **Counterfactual Fan Projections (2021–2030)**, **Dynamic Impulse-Response Functions (Q+1 to Q+8)**, and **Distributional Welfare Splits**.
+3. **Every conclusion is traceable**, showing the exact agent role that created a node, the hashed MCP evidence span that verified it, and the 5-section economic analysis behind it.
 
 ---
 
-## The desks
+## Core Capabilities & Workspaces
 
 <table>
   <tr>
-    <td width="20%" valign="top">
-      <h3>Run</h3>
-      <p>A run is the unit of work. You open one from the rail — never by typing into an empty box. The crew writes the graph into that run: narrations, a scope card, then nodes you can open.</p>
+    <td width="33%" valign="top">
+      <h3>Projects Hub</h3>
+      <p>Organize related inquiries inside persistent <strong>Projects</strong>. Each project maintains shared standing instructions, accumulates verified nodes and empirical charts across runs, and compiles a unified <strong>Project Master Report</strong>.</p>
     </td>
-    <td width="20%" valign="top">
-      <h3>Scope</h3>
-      <p>The contract for the run. Jurisdiction, horizon, objective, instrument, target, identification, distributional cut, baseline, allowed methods, forbidden moves. Change the contract and the affected slice should be the only thing that re-runs.</p>
+    <td width="33%" valign="top">
+      <h3>Run & Blueprint Graph</h3>
+      <p>Watch the 6-role crew assemble the policy spine and digression branches in real time. Inspect inline time-series projections, expand 5-section node analyses directly in the output panel, or scrub backward and forward through the domain event timeline.</p>
     </td>
-    <td width="20%" valign="top">
-      <h3>Map</h3>
-      <p>The argument as a graph. Edges <em>support</em>, <em>attack</em>, <em>depend on</em>, <em>elaborate</em>, or sit as alternatives. This is the object you prune, force, and scrub — not a transcript.</p>
+    <td width="33%" valign="top">
+      <h3>Report & Word / PDF Export</h3>
+      <p>Compile run or project findings with AI and download native <strong>Microsoft Word (<code>.docx</code>)</strong> or <strong>PDF (<code>.pdf</code>)</strong> reports complete with high-resolution embedded charts, node provenance tables, and a verified bibliography.</p>
     </td>
-    <td width="20%" valign="top">
-      <h3>Sources</h3>
-      <p>The evidence locker. Web leads, provenance chips, and (as the platform hardens) hashed MCP spans from series, literature, and policy text. A source is not a vibe check.</p>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>Full Knowledge Graph Map</h3>
+      <p>Filter the argument by <em>Main Spine</em>, <em>Branches</em>, <em>Verified</em>, or <em>Needs Proof</em>. Hover any node to highlight its causal chain, contest or exclude nodes, or click <strong>+ Branch / Digress from this node</strong> to test a deeper mechanism.</p>
     </td>
-    <td width="20%" valign="top">
-      <h3>Draft</h3>
-      <p>Two documents from the surviving nodes: a public brief and a technical appendix. Every sentence is supposed to cite a node ID. Ungrounded lines are the defect, not a style choice.</p>
+    <td width="33%" valign="top">
+      <h3>Scope Protocol & Slice Invalidation</h3>
+      <p>Lock jurisdiction, horizon, instrument, target benchmark, identification strategy, and baseline. Editing the Scope Contract automatically identifies affected downstream nodes, marks them for re-verification, and re-runs only the invalidated slice.</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>Persona & Macro Sandbox</h3>
+      <p>Explore macro regimes and policy counterfactuals through the intellectual lenses of <strong>Adam Smith</strong>, <strong>John Maynard Keynes</strong>, <strong>Milton Friedman</strong>, <strong>Alexander Hamilton</strong>, <strong>Elinor Ostrom</strong>, or <strong>Paul Volcker</strong> — grounded in live FRED charts and promotable to a full Project Run in one click.</p>
     </td>
   </tr>
 </table>
 
 ---
 
-## How a digression is supposed to behave
+## The 5-Stage Policy Spine & Node Taxonomy
 
-A turn is not “the model talks.” A turn is a **crew step** — scoper, instrument parser, literature, series, legal, macro, incidence, critic, synthesizer — writing domain events and mutating the graph.
+Every node on the PoliNote canvas has an explicit analytical role and verification status:
 
-Hard product rules, not slogans:
-
-- **No generation as ready** until instrument, target, identification strategy, and horizon are filled.
-- **No node becomes `supported`** without at least one evidence span. Series-backed claims stay `proposed` if the series desk is off.
-- **The synthesizer may only cite node IDs.** The brief is grounded or it is highlighted as ungrounded.
-- **A scope change invalidates a slice**, not the whole world. Re-run the affected subgraph.
-
-The trace is first-class: an append-only log of `run.*`, `agent.*`, `llm.*`, `mcp.*`, `node.*`, `edge.*`, `critic.*`, `span.*`. That log is the product’s memory. It is not a vendor tracing pane.
-
----
-
-## What “evidence” means here
-
-PoliNote is built for **real policy questions**, not a canned demo.
-
-Leads from the open web can enter a run as unverified context. They do not get to promote a claim. Promotion waits on **allowlisted tools** — economic series with vintages, literature with method and external validity, policy text with a citation path. If a desk is off the allowlist, its claims cannot graduate.
-
-Incidence is a typed argument, not a black-box microsim. Counterfactuals are nodes you can prune. Uncertainty is a first-class kind, not a footnote.
+| Stage / Lane | Node Type | Role in the Policy Argument |
+|---|---|---|
+| **01 · Policy Rule** | `constraint` | The concrete statute, tariff, tax credit, zoning rule, or regulatory mandate being evaluated — and its higher-law bounds. |
+| **02 · Mechanism** | `mechanism` | The causal transmission channel (price pass-through, factor substitution, capital formation) set in motion by the rule. |
+| **03 · Core Finding** | `claim` | A testable quantitative prediction about prices, output, employment, or fiscal balance relative to the baseline. |
+| **04 · Empirical Data** | `evidence` | Hashed proof spans pulled from allowlisted MCP servers (FRED economic series, OpenAlex peer-reviewed studies, official policy docs). |
+| **05 · Who Pays / Gains** | `incidence` | Economic vs. statutory incidence across households, domestic producers, downstream firms, workers, and public budgets. |
+| **Digression Branches** | `counterfactual` · `fork` · `uncertainty` | Status-quo baselines, policy design forks where outcomes split, and identification risks or unmeasured confounders. |
 
 ---
 
-## Isolation
+## Quantitative Economic Analysis & Time-Series Engine
 
-A run belongs to a session. Persistence is **per user**, not a shared pot. One person’s digression does not leak into another’s rail. Secrets never belong in the event log.
+PoliNote pairs empirical retrieval with structural economic visualization across every run, node modal, and exported report:
 
-This repository is the public face of the workbench — what it is, what it refuses to be — not a kit for standing up a copy.
+- **Counterfactual Time-Series Fan Projections (2021–2030)**: Benchmarks historical pre-policy trajectories against the **Status-Quo Baseline** and the **Enacted Policy Path** with a shaded **90% Confidence Interval Fan**.
+- **Dynamic Impulse-Response Curves (Q+1 to Q+8)**: Maps quarter-by-quarter transmission across **Price / Cost Pass-Through**, **Real Sector Output**, and **Employment / Fiscal Balance** to distinguish short-run rigidities from medium-run supply responses.
+- **Distributional Incidence & Welfare Split**: Quantifies net percentage surplus/income shifts and confidence bounds across stakeholder groups.
+- **In-App MCP Verification**:
+  - `econ-series`: St. Louis Fed (**FRED**) series search, multi-period observations, and vintage dates.
+  - `literature`: **OpenAlex** peer-reviewed empirical economics search.
+  - `policy-docs`: Official statutory, congressional, and regulatory document retrieval.
+  - `workspace` & `trace`: Project/run working memos and append-only domain event replay.
 
 ---
 
-## What it is not
+## Hard Analytical Guarantees
 
-Not a general assistant.  
-Not a replacement for CBO, CRS, or a scoring shop.  
-Not a multiplayer canvas.  
-Not a training loop.  
-Not an answer engine that collapses a tariff into a paragraph and calls it done.
-
-PoliNote is for people who already know the question is harder than the first sentence.
+- **Scope Readiness Gate**: The graph cannot graduate to ready until **instrument**, **target**, **identification strategy**, and **horizon** are locked in the Scope Contract.
+- **Empirical Verification Wall**: No node can be marked `Verified` (`supported`) without at least one hashed MCP evidence span attached. The **Critic** role audits identification risks and cannot fabricate positive claims.
+- **Grounded Synthesis**: Every factual claim in the compiled brief and technical appendix cites its backing graph node (`[node_key]`), rendering as an interactive pill that opens that node's provenance trace and time-series chart.
+- **Targeted Subgraph Invalidation**: Modifying a Scope Contract field (`instrument`, `identificationStrategy`, `target`, `horizon`, `baseline`) diffs the contract and marks only the dependent downstream subgraph for re-evaluation.
+- **Session Isolation**: Each researcher's projects, runs, graphs, and event logs are isolated in a per-user DuckDB store hydrated across serverless functions.
 
 <div align="center">
   <br />
-  <em>Scope the instrument. Grow the argument. Cite the node.</em>
+  <em>Lock the scope. Map the spine. Verify with data. Export the report.</em>
   <br /><br />
 </div>

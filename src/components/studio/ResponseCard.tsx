@@ -1,17 +1,29 @@
 "use client";
 
+import { useMemo } from "react";
 import Link from "next/link";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import { EventLog } from "@/components/studio/EventLog";
+import {
+  CounterfactualTrajectoryChart,
+  DistributionalIncidenceBarChart,
+  EconomicScorecardBanner,
+  FredSeriesChartCard,
+  ImpulseResponseChart,
+  extractFredSeries,
+} from "@/components/studio/ReportCharts";
 import { ScopeCard } from "@/components/studio/ScopeCard";
 import { eventNodeId, humanAgent } from "@/lib/ai/event-view";
+import { buildRunEconomicModel } from "@/lib/economics/engine";
 import {
   NODE_KIND_TAXONOMY,
   NODE_STATUS_TAXONOMY,
 } from "@/lib/ui/node-taxonomy";
 import type { ThreadItem } from "@/components/studio/thread-types";
+import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionNode } from "@/schemas/digression";
 import type { RunEvent } from "@/schemas/run-event";
+import type { ScopeContract } from "@/schemas/scope-contract";
 
 const ROLE: Record<string, string> = {
   scoper: "Locked the Scope Contract",
@@ -26,9 +38,12 @@ const ROLE: Record<string, string> = {
 };
 
 type ResponseCardProps = {
+  question?: string;
   items: ThreadItem[];
   events: RunEvent[];
   nodes?: DigressionNode[];
+  analyses?: Record<string, NodeAnalysis>;
+  scope?: ScopeContract | null;
   finished: boolean;
   onOpenNode: (id: string) => void;
 };
@@ -63,14 +78,18 @@ function placedNodeIds(events: RunEvent[]): string[] {
 }
 
 export function ResponseCard({
+  question = "",
   items,
   events,
   nodes: graphNodes = [],
+  analyses = {},
+  scope = null,
   finished,
   onOpenNode,
 }: ResponseCardProps) {
   const narrations = items.filter((item) => item.kind === "narration");
   const scopeItem = items.find((item) => item.kind === "scope");
+  const activeScope = scopeItem?.kind === "scope" ? scopeItem.contract : scope;
   const chips = mcpChips(events);
   const okChips = chips.filter((c) => c.ok);
 
@@ -83,7 +102,22 @@ export function ResponseCard({
           .filter((n): n is DigressionNode => Boolean(n))
       : graphNodes;
 
-  // Separate primary conclusion (critic / synthesizer / latest narration) from intermediate steps
+  const fredSeries = useMemo(
+    () => extractFredSeries(turnNodes.length > 0 ? turnNodes : graphNodes),
+    [turnNodes, graphNodes],
+  );
+
+  const econModel = useMemo(() => {
+    const targetNodes = turnNodes.length > 0 ? turnNodes : graphNodes;
+    if (targetNodes.length === 0 && !activeScope) return null;
+    return buildRunEconomicModel({
+      question: question || activeScope?.question || "Policy evaluation",
+      scope: activeScope,
+      nodes: targetNodes,
+      fredSeries,
+    });
+  }, [question, activeScope, turnNodes, graphNodes, fredSeries]);
+
   const leadNarration = narrations[narrations.length - 1];
   const intermediateNarrations =
     narrations.length > 1 ? narrations.slice(0, -1) : [];
@@ -103,7 +137,7 @@ export function ResponseCard({
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
         <div>
           <p className="response-agent">
-            {finished ? "Policy Output & Trace" : "Crew Building Output…"}
+            {finished ? "Economic Analysis & Policy Output" : "Crew Building Analysis…"}
           </p>
           <p className="mt-0.5 text-[11px] text-[var(--muted)]">
             {turnNodes.filter((n) => n.status === "supported").length} verified ·{" "}
@@ -117,7 +151,7 @@ export function ResponseCard({
             href={`/app/draft?run=${runId}`}
             className="node-action border-[var(--copper)]/60 bg-[var(--copper)]/12 text-[var(--copper)]"
           >
-            Compile Word / PDF Report →
+            Report & Word / PDF Export →
           </Link>
         ) : null}
       </header>
@@ -135,13 +169,18 @@ export function ResponseCard({
         ) : null,
       )}
 
-      {/* 2. Key Takeaway / Primary Output */}
+      {/* 2. Quantitative Economic Scorecard */}
+      {econModel && turnNodes.length > 0 ? (
+        <EconomicScorecardBanner scorecard={econModel.scorecard} compact />
+      ) : null}
+
+      {/* 3. Executive Synthesis & Key Findings */}
       {leadNarration ? (
         <section className="response-agent-block">
           <div className="mb-1 flex items-center justify-between gap-2">
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
               {humanAgent(leadNarration.agent)} —{" "}
-              {ROLE[leadNarration.agent] ?? "Summary"}
+              {ROLE[leadNarration.agent] ?? "Executive Synthesis"}
             </span>
           </div>
           <AnalysisBody
@@ -152,58 +191,115 @@ export function ResponseCard({
         </section>
       ) : null}
 
-      {/* 3. Clear Node Cards: What Was Placed & What Each Node Means */}
+      {/* 4. Inline Time-Series & Economic Charts right inside the Output Panel */}
+      {econModel && turnNodes.length > 0 ? (
+        <div className="space-y-3 border-t border-[var(--line)] pt-3">
+          <div className="flex items-center justify-between">
+            <p className="response-actions-label">
+              Time-Series Projections, FRED Series & Distributional Incidence
+            </p>
+          </div>
+          <CounterfactualTrajectoryChart
+            series={econModel.counterfactual}
+            compact
+          />
+          {fredSeries.slice(0, 1).map((series) => (
+            <FredSeriesChartCard key={series.key} series={series} />
+          ))}
+          <details className="border border-[var(--line)] bg-[var(--bg)]/45 p-3">
+            <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+              View Dynamic Impulse-Response & Distributional Incidence Charts
+            </summary>
+            <div className="mt-3 space-y-3">
+              <ImpulseResponseChart
+                series={econModel.impulseResponse}
+                compact
+              />
+              <DistributionalIncidenceBarChart
+                items={econModel.incidenceDistribution}
+              />
+            </div>
+          </details>
+        </div>
+      ) : null}
+
+      {/* 5. Clear Node Cards with Inline Deep Economic Analysis */}
       {turnNodes.length > 0 ? (
         <div className="space-y-2 border-t border-[var(--line)] pt-3">
           <div className="flex items-center justify-between">
             <p className="response-actions-label">
-              Argument Nodes Built (Click Any Node to Trace How It Was Made)
+              Stage-by-Stage Argument Nodes & Deep Economic Analysis ({turnNodes.length})
             </p>
           </div>
-          <div className="grid gap-1.5">
+          <div className="grid gap-2">
             {turnNodes.map((node) => {
               const kindInfo = NODE_KIND_TAXONOMY[node.kind];
               const statusInfo = NODE_STATUS_TAXONOMY[node.status];
+              const nodeAnalysis = analyses[node.id];
               return (
-                <button
+                <div
                   key={node.id}
-                  type="button"
-                  onClick={() => onOpenNode(node.id)}
-                  className="flex w-full items-center justify-between gap-3 border border-[var(--line)] bg-[var(--bg)]/55 px-3 py-2 text-left transition hover:border-[var(--copper)]/50 hover:bg-[var(--paper-strong)]"
+                  className="border border-[var(--line)] bg-[var(--bg)]/55 p-3 transition hover:border-[var(--copper)]/40"
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
-                        style={{ color: kindInfo.color }}
-                      >
-                        {kindInfo.shortLabel}
-                      </span>
-                      <span className="text-[10px] text-[var(--muted)]">
-                        · {kindInfo.stage}
-                      </span>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+                          style={{ color: kindInfo.color }}
+                        >
+                          {kindInfo.stage} · {kindInfo.label}
+                        </span>
+                      </div>
+                      <h4 className="mt-1 font-[family-name:var(--font-display)] text-sm font-medium text-[var(--ink)]">
+                        {node.title}
+                      </h4>
+                      <p className="mt-1 text-xs leading-relaxed text-[var(--ink)]/85">
+                        {node.body}
+                      </p>
                     </div>
-                    <p className="mt-0.5 truncate text-xs font-medium text-[var(--ink)]">
-                      {node.title}
-                    </p>
+                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      <span
+                        className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
+                        style={{
+                          backgroundColor: statusInfo.bgColor,
+                          color: statusInfo.color,
+                        }}
+                      >
+                        {statusInfo.shortLabel}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onOpenNode(node.id)}
+                        className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--copper)] hover:underline"
+                      >
+                        Full Trace & Chart ↗
+                      </button>
+                    </div>
                   </div>
-                  <span
-                    className="shrink-0 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
-                    style={{
-                      backgroundColor: statusInfo.bgColor,
-                      color: statusInfo.color,
-                    }}
-                  >
-                    {statusInfo.shortLabel}
-                  </span>
-                </button>
+
+                  {nodeAnalysis?.body ? (
+                    <details className="mt-2 border-t border-[var(--line)] pt-2">
+                      <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)] hover:text-[var(--copper)]">
+                        Expand 5-Section Economic Analysis (Mechanism, Incidence, Identification, Sign Flip)
+                      </summary>
+                      <div className="mt-2">
+                        <AnalysisBody
+                          text={nodeAnalysis.body}
+                          nodes={graphNodes}
+                          onOpenNode={onOpenNode}
+                        />
+                      </div>
+                    </details>
+                  ) : null}
+                </div>
               );
             })}
           </div>
         </div>
       ) : null}
 
-      {/* 4. How This Output Was Made: Collapsible Trace of Agent Steps, Data Sources & Scope */}
+      {/* 6. How This Output Was Made: Collapsible Trace of Agent Steps, Data Sources & Scope */}
       <details className="event-log">
         <summary className="event-log-summary">
           <span>How this output was made (Agent steps, data sources & scope)</span>
@@ -228,9 +324,7 @@ export function ResponseCard({
             </div>
           ) : null}
 
-          {scopeItem?.kind === "scope" ? (
-            <ScopeCard contract={scopeItem.contract} />
-          ) : null}
+          {activeScope ? <ScopeCard contract={activeScope} /> : null}
 
           {intermediateNarrations.map((step) => (
             <div
