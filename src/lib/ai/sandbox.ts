@@ -1,7 +1,23 @@
-import { streamText } from "ai";
-import { hasAiCredentials, resolveAiModel } from "@/lib/ai/crew";
+import { gateway, streamText, type LanguageModel } from "ai";
+import { openai } from "@ai-sdk/openai";
 import { getObservations, resolveCanonicalSeries } from "@/lib/mcp/fred";
 import type { ExtractedSeries } from "@/components/studio/ReportCharts";
+
+function hasSandboxAiCredentials(): boolean {
+  return Boolean(
+    process.env.OPENAI_API_KEY?.trim() ||
+      process.env.AI_GATEWAY_API_KEY?.trim() ||
+      process.env.VERCEL_OIDC_TOKEN?.trim(),
+  );
+}
+
+function resolveSandboxAiModel(modelId: string): LanguageModel {
+  const cleanId = modelId.replace(/^openai\//, "");
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    return openai(cleanId);
+  }
+  return gateway(`openai/${cleanId}`);
+}
 
 export type SandboxPersona = {
   id: string;
@@ -288,11 +304,11 @@ Rules:
 - Use bullet points where helpful for sharp contrasts.`;
 
   let streamedAny = false;
-  if (hasAiCredentials()) {
+  if (hasSandboxAiCredentials()) {
     for (const modelId of models) {
       try {
         const result = streamText({
-          model: resolveAiModel(modelId),
+          model: resolveSandboxAiModel(modelId),
           providerOptions: {
             openai: {
               reasoningEffort: "low",
