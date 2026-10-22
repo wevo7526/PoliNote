@@ -182,11 +182,7 @@ const STOP_WORDS = new Set([
 ]);
 
 export function resolveFredKey(): string | null {
-  const raw =
-    process.env["FRED_API_KEY"] ||
-    process.env["FRED_KEY"] ||
-    process.env["NEXT_PUBLIC_FRED_API_KEY"] ||
-    "";
+  const raw = process.env["FRED_API_KEY"] || "";
   const cleaned = raw
     .trim()
     .replace(/^['"]|['"]$/g, "")

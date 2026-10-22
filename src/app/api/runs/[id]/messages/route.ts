@@ -8,6 +8,7 @@ import { draftsFromCrewEvent } from "@/lib/ai/run-log";
 import type { RunEventDraft } from "@/lib/db/events";
 import { getProjectContextDigest } from "@/lib/db/projects";
 import { assertRunExists, getRun, persistTurn } from "@/lib/db/runs";
+import { redactSecrets } from "@/lib/mcp/http";
 import { getSessionUserId } from "@/lib/session";
 import type { RunSnapshot } from "@/lib/platform-types";
 import type { ThreadItem } from "@/components/studio/thread-types";
@@ -133,7 +134,9 @@ export async function POST(request: Request, ctx: RouteCtx) {
         } catch (persistError) {
           console.error(
             "[polinote/messages] persist failed",
-            persistError instanceof Error ? persistError.message : persistError,
+            persistError instanceof Error
+              ? redactSecrets(persistError.message)
+              : "persist error",
           );
         }
       };

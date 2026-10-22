@@ -22,21 +22,22 @@ function writableSecretDir(): string {
   return path.join(process.cwd(), "data");
 }
 
-function derivedSecret(): string | null {
-  const seed = process.env.VERCEL_PROJECT_ID?.trim();
-  if (!seed) return null;
-  return createHmac("sha256", "polinote-session").update(seed).digest("hex");
-}
+let warnedMissingSessionSecret = false;
 
 async function sessionSecret(): Promise<string> {
-  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 16) {
-    return process.env.SESSION_SECRET;
+  const configured = process.env.SESSION_SECRET?.trim();
+  if (configured && configured.length >= 16) {
+    return configured;
   }
 
-  // Vercel's function FS is read-only. Never mkdir under /var/task.
-  const derived = derivedSecret();
-  if (derived) return derived;
+  if (isServerless() && !warnedMissingSessionSecret) {
+    warnedMissingSessionSecret = true;
+    console.warn(
+      "[polinote/session] SESSION_SECRET (>= 16 chars) is not set; using ephemeral per-instance secret",
+    );
+  }
 
+  // Vercel's function FS is read-only under /var/task; write ephemeral fallback to /tmp.
   const dir = writableSecretDir();
   const file = path.join(dir, ".session-secret");
   try {

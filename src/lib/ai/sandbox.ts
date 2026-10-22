@@ -1,5 +1,5 @@
 import { streamText } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { hasAiCredentials, resolveAiModel } from "@/lib/ai/crew";
 import { getObservations, resolveCanonicalSeries } from "@/lib/mcp/fred";
 import type { ExtractedSeries } from "@/components/studio/ReportCharts";
 
@@ -288,32 +288,34 @@ Rules:
 - Use bullet points where helpful for sharp contrasts.`;
 
   let streamedAny = false;
-  for (const modelId of models) {
-    try {
-      const result = streamText({
-        model: openai(modelId),
-        providerOptions: {
-          openai: {
-            reasoningEffort: "low",
-            reasoningSummary: null,
+  if (hasAiCredentials()) {
+    for (const modelId of models) {
+      try {
+        const result = streamText({
+          model: resolveAiModel(modelId),
+          providerOptions: {
+            openai: {
+              reasoningEffort: "low",
+              reasoningSummary: null,
+            },
           },
-        },
-        system: systemPrompt,
-        prompt: JSON.stringify({
-          userPrompt: input.prompt,
-          persona: persona.name,
-          era: persona.era,
-          liveFredIndicators: chartDigest,
-        }),
-      });
-      for await (const delta of result.textStream) {
-        if (!delta) continue;
-        streamedAny = true;
-        yield { type: "delta", text: delta };
+          system: systemPrompt,
+          prompt: JSON.stringify({
+            userPrompt: input.prompt,
+            persona: persona.name,
+            era: persona.era,
+            liveFredIndicators: chartDigest,
+          }),
+        });
+        for await (const delta of result.textStream) {
+          if (!delta) continue;
+          streamedAny = true;
+          yield { type: "delta", text: delta };
+        }
+        if (streamedAny) break;
+      } catch {
+        continue;
       }
-      if (streamedAny) break;
-    } catch {
-      continue;
     }
   }
 

@@ -7,6 +7,7 @@ import {
   resolveCanonicalSeries,
   type FredSeries,
 } from "@/lib/mcp/fred";
+import { redactSecrets } from "@/lib/mcp/http";
 import { ensureMcpTools } from "@/lib/mcp/register";
 import { serverForTool } from "@/lib/mcp/catalog";
 import type { RunDraft } from "@/lib/platform-types";
@@ -80,7 +81,7 @@ export function deriveQueries(question: string, scope: ScopeBits): SpecialistQue
 }
 
 function publicToolError(error: string): string {
-  return error.replace(/api[_-]?key=[^&\s]+/gi, "api_key=redacted");
+  return redactSecrets(error);
 }
 
 function asSpan(value: unknown): EvidenceSpan | null {

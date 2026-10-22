@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { createProject, listProjects } from "@/lib/db/projects";
 import { listRuns } from "@/lib/db/runs";
+import { redactSecrets } from "@/lib/mcp/http";
 import { getSessionUserId } from "@/lib/session";
 
 export const runtime = "nodejs";
 
 function publicError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return raw.replace(/\s+/g, " ").trim().slice(0, 280) || "Project request failed.";
+  return redactSecrets(raw).replace(/\s+/g, " ").trim().slice(0, 280) || "Project request failed.";
 }
 
 export async function GET() {

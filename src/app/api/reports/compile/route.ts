@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { hasAiCredentials, resolveAiModel } from "@/lib/ai/crew";
+import { redactSecrets } from "@/lib/mcp/http";
 import {
   collectBibliography,
   extractFredSeries,
@@ -228,8 +229,11 @@ export async function POST(request: Request) {
       analyses,
     });
 
-    if (process.env.OPENAI_API_KEY && nodes.length > 0) {
-      const preferred = process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+    if (hasAiCredentials() && nodes.length > 0) {
+      const preferred =
+        process.env.OPENAI_MODEL?.trim() ||
+        process.env.AI_GATEWAY_MODEL?.trim() ||
+        DEFAULT_MODEL;
       const models = [preferred, ...FALLBACK_MODELS].filter(
         (m, i, a) => m.length > 0 && a.indexOf(m) === i,
       );
@@ -239,7 +243,7 @@ export async function POST(request: Request) {
       for (const modelId of models) {
         try {
           const { text } = await generateText({
-            model: openai(modelId),
+            model: resolveAiModel(modelId),
             providerOptions: {
               openai: {
                 reasoningEffort: "low",
@@ -349,8 +353,8 @@ Return ONLY valid JSON.`,
 
     return NextResponse.json({ report: baseReport });
   } catch (error) {
-    const message =
+    const raw =
       error instanceof Error ? error.message : "Could not compile report.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: redactSecrets(raw) }, { status: 500 });
   }
 }

@@ -1,4 +1,5 @@
 import { layoutNodes } from "@/lib/ai/layout";
+import { redactSecrets } from "@/lib/mcp/http";
 import type { RunSnapshot } from "@/lib/platform-types";
 import type { ThreadItem } from "@/components/studio/thread-types";
 import type { NodeAnalysis } from "@/schemas/analysis";
@@ -63,7 +64,7 @@ export function publicCrewError(error: unknown): string {
   if (/timeout|etimedout|aborted|abort/i.test(raw)) {
     return "The crew timed out mid-turn.";
   }
-  const trimmed = raw.replace(/\s+/g, " ").trim();
+  const trimmed = redactSecrets(raw).replace(/\s+/g, " ").trim();
   return trimmed.slice(0, 280) || "The crew could not finish this turn.";
 }
 

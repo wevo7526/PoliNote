@@ -2,6 +2,7 @@ import {
   streamSandboxTurn,
   type SandboxStreamEvent,
 } from "@/lib/ai/sandbox";
+import { redactSecrets } from "@/lib/mcp/http";
 import { getSessionUserId } from "@/lib/session";
 
 export const runtime = "nodejs";
@@ -58,9 +59,9 @@ export async function POST(request: Request) {
           send(event);
         }
       } catch (error) {
-        const message =
+        const raw =
           error instanceof Error ? error.message : "Sandbox turn failed.";
-        send({ type: "error", message });
+        send({ type: "error", message: redactSecrets(raw) });
       } finally {
         close();
       }

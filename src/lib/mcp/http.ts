@@ -1,3 +1,15 @@
+export function redactSecrets(value: string): string {
+  return value
+    .replace(/([?&](?:api[_-]?key|token|key|secret)=)[^&\s"']+/gi, "$1redacted")
+    .replace(/\b((?:api[_-]?key|token|secret|password)\s*[=:]\s*)[^\s,&"']+/gi, "$1redacted")
+    .replace(/\bBearer\s+[A-Za-z0-9._-]+/gi, "Bearer redacted")
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, "sk-redacted")
+    .replace(/\bfc-[A-Za-z0-9_-]{12,}/g, "fc-redacted")
+    .replace(/\bvercel_blob_rw_[A-Za-z0-9_-]+/g, "vercel_blob_rw_redacted")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "jwt-redacted")
+    .replace(/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, "postgres://redacted");
+}
+
 export async function getJson<T>(
   url: string,
   init: RequestInit & { timeoutMs?: number } = {},
@@ -26,11 +38,17 @@ export async function getJson<T>(
       } catch {
         /* ignore non-json error body */
       }
+      const safeDetail = detail ? redactSecrets(detail) : "";
       throw new Error(
-        detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`,
+        safeDetail ? `HTTP ${response.status}: ${safeDetail}` : `HTTP ${response.status}`,
       );
     }
     return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof Error) {
+      error.message = redactSecrets(error.message);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }

@@ -1,3 +1,4 @@
+import { redactSecrets } from "@/lib/mcp/http";
 import {
   filterReputableHits,
   LITERATURE_QUERY_HINT,
@@ -16,7 +17,7 @@ const SEARCH_TIMEOUT_MS = 6000;
  * Social and user-generated hosts are dropped. Never log the API key.
  */
 export async function searchPolicyWeb(query: string): Promise<WebHit[]> {
-  const key = process.env.FIRECRAWL_API_KEY;
+  const key = process.env.FIRECRAWL_API_KEY?.trim();
   if (!key) return [];
 
   const controller = new AbortController();
@@ -55,7 +56,7 @@ export async function searchPolicyWeb(query: string): Promise<WebHit[]> {
   } catch (error) {
     console.error(
       "[polinote/firecrawl]",
-      error instanceof Error ? error.message : "search failed",
+      error instanceof Error ? redactSecrets(error.message) : "search failed",
     );
     return [];
   } finally {

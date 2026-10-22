@@ -1,4 +1,4 @@
-import { generateText, streamText } from "ai";
+import { gateway, generateText, streamText, type LanguageModel } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { allowRoleAction } from "@/agents/walls";
 import {
@@ -15,6 +15,7 @@ import {
   streamTraceNarrator,
 } from "@/lib/ai/crew-specialists";
 import { shortNodeKey } from "@/lib/ui/prose";
+import { redactSecrets } from "@/lib/mcp/http";
 import { ensureMcpTools } from "@/lib/mcp/register";
 import { filterReputableHits } from "@/lib/sources/reputable";
 import { searchPolicyWeb, type WebHit } from "@/lib/tools/firecrawl";
@@ -162,8 +163,27 @@ function isModelUnavailable(error: unknown): boolean {
     /model|gpt-|response_format|not found|does not exist|unsupported/i.test(raw);
 }
 
+export function hasAiCredentials(): boolean {
+  return Boolean(
+    process.env.OPENAI_API_KEY?.trim() ||
+      process.env.AI_GATEWAY_API_KEY?.trim() ||
+      process.env.VERCEL_OIDC_TOKEN?.trim(),
+  );
+}
+
+export function resolveAiModel(modelId: string): LanguageModel {
+  const cleanId = modelId.replace(/^openai\//, "");
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    return openai(cleanId);
+  }
+  return gateway(`openai/${cleanId}`);
+}
+
 function modelQueue(): string[] {
-  const preferred = process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  const preferred =
+    process.env.OPENAI_MODEL?.trim() ||
+    process.env.AI_GATEWAY_MODEL?.trim() ||
+    DEFAULT_MODEL;
   return [preferred, ...FALLBACK_MODELS].filter(
     (id, index, all) => id.length > 0 && all.indexOf(id) === index,
   );
@@ -616,7 +636,7 @@ async function* streamNarration(input: {
   for (;;) {
     try {
       const result = streamText({
-        model: openai(input.model.id),
+        model: resolveAiModel(input.model.id),
         providerOptions: useReasoning ? NARRATION_OPTIONS : undefined,
         system: `${AUTONOMY}\n${input.system}`,
         prompt: input.prompt,
@@ -639,7 +659,7 @@ async function* streamNarration(input: {
         "[polinote/crew] narration failed",
         input.agent,
         input.model.id,
-        error instanceof Error ? error.message : error,
+        error instanceof Error ? redactSecrets(error.message) : "narration error",
       );
       if (isReasoningSummaryError(error) && useReasoning) {
         useReasoning = false;
@@ -671,7 +691,7 @@ async function askJson(
     const timeout = withTimeout(JSON_TIMEOUT_MS);
     try {
       const { text } = await generateText({
-        model: openai(model.id),
+        model: resolveAiModel(model.id),
         providerOptions: useReasoning ? JSON_OPTIONS : undefined,
         abortSignal: timeout.signal,
         system: `${AUTONOMY}\n${system}\nReturn ONLY a compact JSON object. No markdown fences. Keep string values short.`,
@@ -682,7 +702,7 @@ async function askJson(
       console.error(
         "[polinote/crew] json call failed",
         model.id,
-        error instanceof Error ? error.message : error,
+        error instanceof Error ? redactSecrets(error.message) : "json error",
       );
       if (isReasoningSummaryError(error) && useReasoning) {
         useReasoning = false;
@@ -706,7 +726,7 @@ async function askAnalyses(
     const timeout = withTimeout(ANALYSIS_TIMEOUT_MS);
     try {
       const { text } = await generateText({
-        model: openai(model.id),
+        model: resolveAiModel(model.id),
         providerOptions: useReasoning ? JSON_OPTIONS : undefined,
         abortSignal: timeout.signal,
         system: `${AUTONOMY}
@@ -726,7 +746,7 @@ One short paragraph per section. Cite only the provided webLeads. Never invent p
     } catch (error) {
       console.error(
         "[polinote/crew] analysis pass failed",
-        error instanceof Error ? error.message : error,
+        error instanceof Error ? redactSecrets(error.message) : "analysis error",
       );
       if (isReasoningSummaryError(error) && useReasoning) {
         useReasoning = false;
@@ -752,8 +772,8 @@ export async function* streamCrewTurn(input: {
     nodeKeys: string[];
   };
 }): AsyncGenerator<CrewStreamEvent> {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not set");
+  if (!hasAiCredentials()) {
+    throw new Error("OPENAI_API_KEY or Vercel AI Gateway OIDC is not set");
   }
   ensureMcpTools();
 
@@ -797,7 +817,7 @@ Each field is one dense paragraph (3–5 sentences). runTitle max 80 chars.`,
   } catch (error) {
     console.error(
       "[polinote/crew] scope json failed, using fallback",
-      error instanceof Error ? error.message : error,
+      error instanceof Error ? redactSecrets(error.message) : "scope error",
     );
     scopeOut = coerceScope(input.prior?.scope ?? {}, input.question);
   }
@@ -878,7 +898,7 @@ Attach every digression to a spine node. Do not start a second disconnected argu
   } catch (error) {
     console.error(
       "[polinote/crew] skeleton json failed, using fallback graph",
-      error instanceof Error ? error.message : error,
+      error instanceof Error ? redactSecrets(error.message) : "skeleton error",
     );
     graphOut = revising ? { nodes: [], edges: [] } : fallbackGraph(scopeOut.scope);
   }
@@ -1038,7 +1058,7 @@ Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism
       ).catch((error) => {
         console.error(
           "[polinote/crew] synthesizer json failed, using node-ID fallback",
-          error instanceof Error ? error.message : error,
+          error instanceof Error ? redactSecrets(error.message) : "synthesizer error",
         );
         return null;
       })

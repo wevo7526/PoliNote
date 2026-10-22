@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteRun, getRun } from "@/lib/db/runs";
+import { redactSecrets } from "@/lib/mcp/http";
 import { getSessionUserId } from "@/lib/session";
 
 export const runtime = "nodejs";
@@ -8,7 +9,7 @@ type RouteCtx = { params: Promise<{ id: string }> };
 
 function publicError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return raw.replace(/\s+/g, " ").trim().slice(0, 280) || "Run request failed.";
+  return redactSecrets(raw).replace(/\s+/g, " ").trim().slice(0, 280) || "Run request failed.";
 }
 
 export async function GET(_request: Request, ctx: RouteCtx) {

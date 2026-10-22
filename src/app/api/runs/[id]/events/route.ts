@@ -1,3 +1,4 @@
+import { redactSecrets } from "@/lib/mcp/http";
 import { listEvents } from "@/lib/db/events";
 import { assertRunExists } from "@/lib/db/runs";
 import { getSessionUserId } from "@/lib/session";
@@ -64,7 +65,7 @@ export async function GET(request: Request, ctx: RouteCtx) {
       } catch (error) {
         console.error(
           "[polinote/events]",
-          error instanceof Error ? error.message : error,
+          error instanceof Error ? redactSecrets(error.message) : "events error",
         );
       } finally {
         close();

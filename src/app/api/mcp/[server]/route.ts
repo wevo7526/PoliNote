@@ -1,5 +1,6 @@
 import { MCP_SERVERS, type McpServerName } from "@/mcp/servers";
 import { mcpConfigured, toolsForServer } from "@/lib/mcp/catalog";
+import { redactSecrets } from "@/lib/mcp/http";
 import { ensureMcpTools } from "@/lib/mcp/register";
 import { getSessionUserId } from "@/lib/session";
 import { callTool, type ToolName } from "@/tools/registry";
@@ -14,7 +15,7 @@ function isServer(value: string): value is McpServerName {
 }
 
 function redact(value: string): string {
-  return value.replace(/api[_-]?key=[^&\s]+/gi, "api_key=redacted");
+  return redactSecrets(value);
 }
 
 export async function GET(_request: Request, ctx: RouteCtx) {
