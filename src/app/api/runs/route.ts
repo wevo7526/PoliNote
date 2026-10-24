@@ -1,28 +1,24 @@
 import { NextResponse } from "next/server";
-import { listProjects } from "@/lib/db/projects";
+import { createProject, listProjects } from "@/lib/db/projects";
 import { createRun, listRuns } from "@/lib/db/runs";
-import { redactSecrets } from "@/lib/mcp/http";
+import { toTypedApiError } from "@/lib/env";
 import { getSessionUserId } from "@/lib/session";
 
 export const runtime = "nodejs";
 
-function publicError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return redactSecrets(raw).replace(/\s+/g, " ").trim().slice(0, 280) || "Could not open a run.";
-}
-
 export async function GET() {
   try {
     const userId = await getSessionUserId();
-    const [projects, runs] = await Promise.all([
-      listProjects(userId),
-      listRuns(userId),
-    ]);
-    return NextResponse.json({ projects, runs });
+    const projects = await listProjects(userId);
+    const runs = await listRuns(userId);
+    return NextResponse.json({ projects, runs, userId });
   } catch (error) {
-    const message = publicError(error);
-    console.error("[polinote/runs] list failed", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    const typed = toTypedApiError(error, "runs");
+    console.error("[polinote/runs] list failed", typed.code, typed.message);
+    return NextResponse.json(
+      { error: typed.message, errorDetail: typed },
+      { status: 500 },
+    );
   }
 }
 
@@ -30,18 +26,46 @@ export async function POST(request: Request) {
   try {
     const userId = await getSessionUserId();
     const body = (await request.json().catch(() => null)) as {
+      id?: unknown;
       projectId?: unknown;
       title?: unknown;
+      project?: {
+        id?: unknown;
+        title?: unknown;
+        description?: unknown;
+        contextMemo?: unknown;
+      } | null;
     } | null;
+    const id = typeof body?.id === "string" ? body.id.trim() : undefined;
     const projectId =
       typeof body?.projectId === "string" ? body.projectId.trim() : undefined;
     const title =
       typeof body?.title === "string" ? body.title.trim() : undefined;
-    const run = await createRun(userId, { projectId, title });
-    return NextResponse.json({ run }, { status: 201 });
+
+    if (body?.project && typeof body.project === "object" && projectId) {
+      await createProject(userId, {
+        id: projectId,
+        title:
+          typeof body.project.title === "string" ? body.project.title : undefined,
+        description:
+          typeof body.project.description === "string"
+            ? body.project.description
+            : undefined,
+        contextMemo:
+          typeof body.project.contextMemo === "string"
+            ? body.project.contextMemo
+            : undefined,
+      }).catch(() => undefined);
+    }
+
+    const run = await createRun(userId, { id, projectId, title });
+    return NextResponse.json({ run, userId }, { status: 201 });
   } catch (error) {
-    const message = publicError(error);
-    console.error("[polinote/runs] create failed", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    const typed = toTypedApiError(error, "runs");
+    console.error("[polinote/runs] create failed", typed.code, typed.message);
+    return NextResponse.json(
+      { error: typed.message, errorDetail: typed },
+      { status: 500 },
+    );
   }
 }

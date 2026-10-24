@@ -3,6 +3,7 @@ import {
   type SandboxStreamEvent,
 } from "@/lib/ai/sandbox";
 import { redactSecrets } from "@/lib/mcp/http";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { getSessionUserId } from "@/lib/session";
 
 export const runtime = "nodejs";
@@ -14,7 +15,16 @@ function encodeSse(event: SandboxStreamEvent): Uint8Array {
 }
 
 export async function POST(request: Request) {
-  await getSessionUserId();
+  const userId = await getSessionUserId();
+  const rate = checkRateLimit(`sandbox:${userId}`, 30, 60_000);
+  if (!rate.allowed) {
+    return Response.json(
+      {
+        error: `Rate limit reached. Please wait ${Math.ceil(rate.resetInMs / 1000)}s.`,
+      },
+      { status: 429 },
+    );
+  }
   const body = (await request.json().catch(() => null)) as {
     prompt?: unknown;
     personaId?: unknown;

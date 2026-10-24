@@ -1,9 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 const COOKIE = "pn_uid";
+const USER_HEADER = "x-polinote-user";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -71,6 +72,7 @@ function sign(userId: string, secret: string): string {
 }
 
 function verify(userId: string, mac: string, secret: string): boolean {
+  if (!/^[0-9a-f]{64}$/i.test(mac)) return false;
   const expected = sign(userId, secret);
   const a = Buffer.from(expected, "hex");
   const b = Buffer.from(mac, "hex");
@@ -78,24 +80,37 @@ function verify(userId: string, mac: string, secret: string): boolean {
 }
 
 export async function getSessionUserId(): Promise<string> {
-  const store = await cookies();
-  const raw = store.get(COOKIE)?.value;
-  const secret = await sessionSecret();
+  const [store, hdrs, secret] = await Promise.all([
+    cookies(),
+    headers(),
+    sessionSecret(),
+  ]);
 
-  if (raw) {
-    const [userId, mac] = raw.split(".");
-    if (userId && mac && isUserId(userId) && verify(userId, mac, secret)) {
-      return userId;
-    }
+  const headerUid = hdrs.get(USER_HEADER)?.trim() ?? "";
+  const rawCookie = store.get(COOKIE)?.value?.trim() ?? "";
+  const [cookieUid, mac] = rawCookie.split(".");
+
+  if (cookieUid && mac && isUserId(cookieUid) && verify(cookieUid, mac, secret)) {
+    return cookieUid;
   }
 
-  const userId = crypto.randomUUID();
-  store.set(COOKIE, `${userId}.${sign(userId, secret)}`, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 365,
-  });
-  return userId;
+  // Accountless localization: preserve a valid client-supplied or previously-minted
+  // UUID across cold starts or secret rotations, then re-sign the session cookie.
+  const resolvedId =
+    (headerUid && isUserId(headerUid) ? headerUid : null) ??
+    (cookieUid && isUserId(cookieUid) ? cookieUid : null) ??
+    crypto.randomUUID();
+
+  try {
+    store.set(COOKIE, `${resolvedId}.${sign(resolvedId, secret)}`, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365,
+    });
+  } catch {
+    /* cookies may be read-only in some contexts */
+  }
+  return resolvedId;
 }

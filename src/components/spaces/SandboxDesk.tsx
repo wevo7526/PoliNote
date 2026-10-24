@@ -4,12 +4,11 @@ import { useState } from "react";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
 import { AnalysisBody } from "@/components/studio/AnalysisBody";
 import {
-  CounterfactualTrajectoryChart,
   FredSeriesChartCard,
-  ImpulseResponseChart,
   type ExtractedSeries,
 } from "@/components/studio/ReportCharts";
-import { buildRunEconomicModel } from "@/lib/economics/engine";
+import type { EconometricEstimate } from "@/lib/economics/schemas";
+import type { ExtractedLiteratureEstimate } from "@/lib/mcp/openalex";
 import {
   SANDBOX_PERSONAS,
   type SandboxPersona,
@@ -22,6 +21,9 @@ type SandboxTurnRecord = {
   persona: SandboxPersona | null;
   text: string;
   charts: ExtractedSeries[];
+  estimates: EconometricEstimate[];
+  literature: ExtractedLiteratureEstimate[];
+  dataStatusMessage: string;
   followUps: string[];
   busy: boolean;
 };
@@ -29,26 +31,27 @@ type SandboxTurnRecord = {
 const PLAYFUL_PRESETS = [
   {
     personaId: "adam_smith",
-    label: "Adam Smith on the Current Macro Regime",
-    prompt: "You are Adam Smith, tell us about the current macro regime as him",
+    label: "Adam Smith · Tariff Pass-Through & Division of Labor",
+    prompt:
+      "You are Adam Smith: evaluate the price pass-through and employment effects of a 25% import tariff on electric vehicles.",
   },
   {
     personaId: "keynes",
-    label: "Keynes on Interest Rates & Animal Spirits",
+    label: "Keynes · TCJA Corporate Tax Cut & Business Investment",
     prompt:
-      "You are John Maynard Keynes: diagnose today's interest rates, fiscal deficits, and AI capex boom.",
+      "You are John Maynard Keynes: evaluate how the 2017 Tax Cuts and Jobs Act affected real private nonresidential fixed investment.",
   },
   {
     personaId: "hamilton",
-    label: "Hamilton on EV Tariffs & Chip Bounties",
+    label: "Hamilton · Semiconductor Subsidies vs. Tariffs",
     prompt:
-      "You are Alexander Hamilton: defend domestic semiconductor subsidies and EV tariffs using your 1791 Report on Manufactures.",
+      "You are Alexander Hamilton: compare domestic semiconductor investment subsidies against import duties using your 1791 Report on Manufactures.",
   },
   {
     personaId: "friedman",
-    label: "Friedman on Monetary Lags & Tariff Incidence",
+    label: "Friedman · Monetary Shocks & Inflation Lags",
     prompt:
-      "You are Milton Friedman: who really pays for a 25% import tariff and how should the Fed read current CPI inflation?",
+      "You are Milton Friedman: evaluate monetary policy rate shocks and CPI inflation transmission lags.",
   },
 ];
 
@@ -76,6 +79,9 @@ export function SandboxDesk() {
         persona: null,
         text: "",
         charts: [],
+        estimates: [],
+        literature: [],
+        dataStatusMessage: "",
         followUps: [],
         busy: true,
       },
@@ -119,6 +125,9 @@ export function SandboxDesk() {
                   ...turn,
                   persona: ev.persona,
                   charts: ev.charts,
+                  estimates: ev.estimates,
+                  literature: ev.literature,
+                  dataStatusMessage: ev.dataStatusMessage,
                   followUps: ev.followUps,
                 };
               }
@@ -156,16 +165,21 @@ export function SandboxDesk() {
   return (
     <main className="space-page">
       <section className="work-frame map-frame flex flex-col overflow-hidden">
-        <header className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
+        <header className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] px-4 py-3.5 sm:px-5 sm:py-4">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-              Interactive Political Economy Sandbox
-            </p>
-            <h1 className="mt-1 font-[family-name:var(--font-display)] text-2xl">
-              Thinker Lenses & Live Macro Regime Playground
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
+                Persona Debate Sandbox
+              </span>
+              <span className="border border-[var(--copper)]/40 bg-[var(--copper)]/10 px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--copper)]">
+                Simulated Perspective · Audited Numbers Only
+              </span>
+            </div>
+            <h1 className="mt-1 font-[family-name:var(--font-display)] text-xl sm:text-2xl">
+              Historical Economist Lenses on Live Estimates & Literature
             </h1>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              Ask any question in the voice of Adam Smith, Keynes, Friedman, Hamilton, Ostrom, or Volcker — grounded in live FRED time-series charts.
+              Personas debate strictly over live fetched series, computed econometric estimates, and OpenAlex literature. They cannot introduce unverified numbers, and no generic fallback charts are injected.
             </p>
           </div>
           {turns.length > 0 ? (
@@ -179,12 +193,12 @@ export function SandboxDesk() {
           ) : null}
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
           {/* Persona Lens Picker */}
           <div className="mb-5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
-                Choose a Thinker Lens (or let your prompt pick automatically)
+                Choose a Simulated Perspective Lens
               </p>
               <button
                 type="button"
@@ -212,7 +226,7 @@ export function SandboxDesk() {
                         onClick={() => setSelectedPersonaId(persona.id)}
                       >
                         <span className="block text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-                          {persona.era} · {persona.school}
+                          {persona.perspectiveBanner}
                         </span>
                         <span className="mt-1 block font-[family-name:var(--font-display)] text-base text-[var(--ink)]">
                           {persona.name}
@@ -227,7 +241,7 @@ export function SandboxDesk() {
                           void runSandboxPrompt(persona.sampleQuestion, persona.id);
                         }}
                       >
-                        Ask →
+                        Debate →
                       </button>
                     </div>
                     <p className="mt-1.5 text-xs leading-snug text-[var(--muted)]">
@@ -239,11 +253,10 @@ export function SandboxDesk() {
             </div>
           </div>
 
-          {/* Empty state playful presets */}
           {turns.length === 0 ? (
-            <div className="border border-[var(--line)] bg-[var(--paper)] p-5">
+            <div className="border border-[var(--line)] bg-[var(--paper)] p-4 sm:p-5">
               <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-                Try an Interactive Prompt
+                Launch a Simulated Perspective Debate
               </p>
               <div className="mt-3 grid gap-2.5 md:grid-cols-2">
                 {PLAYFUL_PRESETS.map((preset) => (
@@ -274,16 +287,21 @@ export function SandboxDesk() {
             {turns.map((turn) => (
               <article
                 key={turn.id}
-                className="border border-[var(--line)] bg-[var(--paper)] p-5"
+                className="border border-[var(--line)] bg-[var(--paper)] p-4 sm:p-5"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--line)] pb-3.5">
                   <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-                      {turn.persona
-                        ? `${turn.persona.name} · ${turn.persona.era} (${turn.persona.school})`
-                        : "Summoning economist lens & live FRED indicators…"}
-                    </p>
-                    <h2 className="mt-1 font-[family-name:var(--font-display)] text-xl text-[var(--ink)]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="border border-[var(--copper)]/50 bg-[var(--copper)]/15 px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--copper)]">
+                        {turn.persona?.perspectiveBanner ?? "Simulated Perspective"}
+                      </span>
+                      <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
+                        {turn.persona
+                          ? `${turn.persona.name} (${turn.persona.era})`
+                          : "Querying live data & literature…"}
+                      </span>
+                    </div>
+                    <h2 className="mt-1.5 font-[family-name:var(--font-display)] text-lg text-[var(--ink)] sm:text-xl">
                       “{turn.prompt}”
                     </h2>
                   </div>
@@ -294,54 +312,41 @@ export function SandboxDesk() {
                     onClick={() => {
                       void sendToProjectRun(turn.prompt);
                     }}
-                    title="Promote this Sandbox inquiry into a full 5-stage Policy Spine Run in your active Project"
+                    title="Promote this inquiry into a pre-registered Econometric Run in your active Project"
                   >
-                    Promote to Project Run ({activeProject?.title ?? "Project"}) →
+                    Promote to Full Econometric Run ({activeProject?.title ?? "Project"}) →
                   </button>
                 </div>
 
-                {/* Live FRED Macro Regime + Counterfactual Time-Series Charts */}
+                {/* Data Status Banner */}
+                {turn.dataStatusMessage ? (
+                  <div className="mt-3 border border-[var(--line)] bg-[var(--bg)]/55 px-3.5 py-2.5 text-xs text-[var(--muted)]">
+                    <strong className="text-[var(--copper)]">Live Evidence Status:</strong>{" "}
+                    {turn.dataStatusMessage}
+                  </div>
+                ) : null}
+
+                {/* Only render charts if real relevant live series were found (never forced generic charts) */}
                 {turn.charts.length > 0 ? (
                   <div className="mt-4 space-y-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
-                      Empirical FRED Time-Series & Regime Projections Examined by{" "}
-                      {turn.persona?.name ?? "Persona"}
+                      Live Series & Provenance Examined ({turn.charts.length})
                     </p>
-                    <div className="grid gap-3 lg:grid-cols-3">
+                    <div className="grid gap-3 lg:grid-cols-2">
                       {turn.charts.map((series) => (
                         <FredSeriesChartCard key={series.key} series={series} />
                       ))}
                     </div>
-                    {(() => {
-                      const sim = buildRunEconomicModel({
-                        question: turn.prompt,
-                        scope: null,
-                        nodes: [],
-                        fredSeries: turn.charts,
-                      });
-                      return (
-                        <div className="grid gap-3 lg:grid-cols-2">
-                          <CounterfactualTrajectoryChart
-                            series={sim.counterfactual}
-                            compact
-                          />
-                          <ImpulseResponseChart
-                            series={sim.impulseResponse}
-                            compact
-                          />
-                        </div>
-                      );
-                    })()}
                   </div>
                 ) : null}
 
-                {/* Streamed Persona Analysis */}
+                {/* Streamed & Audited Persona Analysis */}
                 <div className="mt-4">
                   {turn.text ? (
                     <AnalysisBody text={turn.text} />
                   ) : (
                     <p className="text-xs uppercase tracking-[0.14em] text-[var(--copper)]">
-                      Reading FRED series and composing response…
+                      Querying live providers, running numeric audit, and composing simulated perspective…
                     </p>
                   )}
                 </div>
@@ -350,7 +355,7 @@ export function SandboxDesk() {
                 {!turn.busy && turn.followUps.length > 0 ? (
                   <div className="mt-4 border-t border-[var(--line)] pt-3.5">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
-                      Continue the Debate or Switch Lens
+                      Challenge or Fork This Perspective
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {turn.followUps.map((q) => (
@@ -383,7 +388,7 @@ export function SandboxDesk() {
           <input
             type="text"
             className="composer-input py-1"
-            placeholder="Ask anything — e.g., “You are Adam Smith, tell us about the current macro regime as him”…"
+            placeholder="Ask a policy question in a simulated historical lens…"
             value={input}
             disabled={busy}
             onChange={(event) => setInput(event.target.value)}
@@ -393,7 +398,7 @@ export function SandboxDesk() {
             disabled={busy || !input.trim()}
             className="composer-send"
           >
-            {busy ? "Thinking…" : "Explore"}
+            {busy ? "Running…" : "Debate"}
           </button>
         </form>
       </section>

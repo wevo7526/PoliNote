@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useWorkspace } from "@/components/app/WorkspaceProvider";
@@ -18,6 +18,7 @@ import {
   extractFredSeries,
 } from "@/components/studio/ReportCharts";
 import { buildRunEconomicModel } from "@/lib/economics/engine";
+import { USER_HEADER } from "@/lib/local-workspace";
 import {
   buildClientFallbackReport,
   downloadPdfReport,
@@ -37,63 +38,160 @@ export function ProjectDesk() {
   const searchParams = useSearchParams();
   const projectParam = searchParams.get("project");
   const {
+    userId,
     projects,
     activeProjectId,
     activeProject,
+    runs,
+    snapshotsById,
+    selectProject,
+    createProject,
     updateProject,
     newRun,
     selectRun,
   } = useWorkspace();
 
   const targetId = projectParam ?? activeProjectId ?? projects[0]?.id ?? null;
+  const localProject = useMemo(
+    () =>
+      projects.find((item) => item.id === targetId) ??
+      activeProject ??
+      projects[0] ??
+      null,
+    [activeProject, projects, targetId],
+  );
 
   const [data, setData] = useState<ProjectPayload | null>(null);
   const [loading, setLoading] = useState(false);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [contextMemo, setContextMemo] = useState("");
+  const [title, setTitle] = useState(localProject?.title ?? "");
+  const [description, setDescription] = useState(localProject?.description ?? "");
+  const [contextMemo, setContextMemo] = useState(localProject?.contextMemo ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [newProjectTitle, setNewProjectTitle] = useState("");
   const [compiled, setCompiled] = useState<CompiledPolicyReport | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [exportingWord, setExportingWord] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
 
+  // Immediately populate form fields from the localized project when targetId changes
+  useEffect(() => {
+    if (!localProject) return;
+    setTitle(localProject.title);
+    setDescription(localProject.description);
+    setContextMemo(localProject.contextMemo);
+    setSaved(false);
+    setCompiled(null);
+  }, [localProject?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!targetId) return;
     let cancelled = false;
     setLoading(true);
+    setData((prev) => (prev?.project.id === targetId ? prev : null));
+
     void (async () => {
-      const response = await fetch(`/api/projects/${targetId}`);
-      if (!response.ok || cancelled) {
+      try {
+        const response = await fetch(`/api/projects/${targetId}`, {
+          headers: userId ? { [USER_HEADER]: userId } : undefined,
+        });
+        if (!response.ok || cancelled) {
+          if (!cancelled) setLoading(false);
+          return;
+        }
+        const payload = (await response.json()) as ProjectPayload;
+        if (!cancelled) {
+          setData(payload);
+          setTitle(payload.project.title);
+          setDescription(payload.project.description);
+          setContextMemo(payload.project.contextMemo);
+          setCompiled(null);
+          setLoading(false);
+        }
+      } catch {
         if (!cancelled) setLoading(false);
-        return;
-      }
-      const payload = (await response.json()) as ProjectPayload;
-      if (!cancelled) {
-        setData(payload);
-        setTitle(payload.project.title);
-        setDescription(payload.project.description);
-        setContextMemo(payload.project.contextMemo);
-        setCompiled(null);
-        setLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [targetId]);
+  }, [targetId, userId]);
 
-  const project = data?.project ?? activeProject;
-  const snapshots = data?.snapshots ?? [];
-  const allNodes = snapshots.flatMap((s) => s.nodes);
-  const allEdges = snapshots.flatMap((s) => s.edges);
-  const allAnalyses: Record<string, NodeAnalysis> = {};
-  for (const snap of snapshots) {
-    Object.assign(allAnalyses, snap.analyses);
-  }
-  const fredSeries = extractFredSeries(allNodes);
-  const bib = collectBibliography(allNodes, allAnalyses);
+  const project =
+    (data?.project.id === targetId ? data.project : null) ?? localProject;
+
+  // Combine server-returned snapshots with browser-localized snapshots for this project
+  const snapshots = useMemo(() => {
+    if (!project) return [];
+    const byRunId = new Map<string, RunSnapshot>();
+    if (data?.project.id === project.id) {
+      for (const snap of data.snapshots) {
+        byRunId.set(snap.run.id, snap);
+      }
+    }
+    const projectRuns = runs.filter(
+      (r) =>
+        r.projectId === project.id ||
+        (!r.projectId && project.id === projects[0]?.id),
+    );
+    for (const run of projectRuns) {
+      const localSnap = snapshotsById[run.id];
+      if (localSnap) {
+        const existing = byRunId.get(run.id);
+        if (!existing || localSnap.nodes.length >= existing.nodes.length) {
+          byRunId.set(run.id, localSnap);
+        }
+      } else if (!byRunId.has(run.id)) {
+        byRunId.set(run.id, {
+          run,
+          items: [],
+          nodes: [],
+          edges: [],
+          scope: null,
+          analyses: {},
+          events: [],
+          draft: null,
+        });
+      }
+    }
+    return [...byRunId.values()].sort((a, b) =>
+      b.run.updatedAt.localeCompare(a.run.updatedAt),
+    );
+  }, [data, project, projects, runs, snapshotsById]);
+
+  const allNodes = useMemo(
+    () => snapshots.flatMap((s) => s.nodes),
+    [snapshots],
+  );
+  const allEdges = useMemo(
+    () => snapshots.flatMap((s) => s.edges),
+    [snapshots],
+  );
+  const allAnalyses = useMemo(() => {
+    const map: Record<string, NodeAnalysis> = {};
+    for (const snap of snapshots) {
+      Object.assign(map, snap.analyses);
+    }
+    return map;
+  }, [snapshots]);
+  const fredSeries = useMemo(() => extractFredSeries(allNodes), [allNodes]);
+  const bib = useMemo(
+    () => collectBibliography(allNodes, allAnalyses),
+    [allNodes, allAnalyses],
+  );
+  const projectEcon = useMemo(
+    () =>
+      allNodes.length > 0 && project
+        ? buildRunEconomicModel({
+            question: project.description || project.title,
+            scope: snapshots.find((s) => s.scope)?.scope ?? null,
+            nodes: allNodes,
+            fredSeries,
+          })
+        : null,
+    [allNodes, fredSeries, project, snapshots],
+  );
 
   const handleSave = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -109,6 +207,15 @@ export function ProjectDesk() {
       setSaved(true);
       setData((prev) => (prev ? { ...prev, project: updated } : prev));
     }
+  };
+
+  const handleCreateNewProject = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const nextTitle = newProjectTitle.trim() || "New Policy Project";
+    setNewProjectTitle("");
+    setCreatingNew(false);
+    const created = await createProject({ title: nextTitle });
+    selectProject(created.id, true);
   };
 
   const masterBrief =
@@ -133,7 +240,10 @@ export function ProjectDesk() {
       try {
         const res = await fetch("/api/reports/compile", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(userId ? { [USER_HEADER]: userId } : {}),
+          },
           body: JSON.stringify({ projectId: project.id }),
         });
         if (res.ok) {
@@ -226,7 +336,7 @@ export function ProjectDesk() {
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-              Project Hub · Shared Context & Master Report Artifacts
+              Project Hub · Localized Browser & Session Workspace
             </p>
             <h1 className="mt-1 font-[family-name:var(--font-display)] text-2xl">
               {project.title}
@@ -240,6 +350,13 @@ export function ProjectDesk() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="node-action"
+              onClick={() => setCreatingNew((prev) => !prev)}
+            >
+              + New Project
+            </button>
             <button
               type="button"
               className="node-action text-[var(--copper)]"
@@ -273,6 +390,32 @@ export function ProjectDesk() {
             </button>
           </div>
         </header>
+
+        {creatingNew ? (
+          <form
+            onSubmit={handleCreateNewProject}
+            className="flex flex-wrap items-center gap-2 border-b border-[var(--line)] bg-[var(--paper)] px-5 py-3"
+          >
+            <input
+              type="text"
+              className="field-input max-w-md flex-1 text-xs"
+              placeholder="New project title (e.g., Semiconductor & Trade Policy)…"
+              value={newProjectTitle}
+              onChange={(e) => setNewProjectTitle(e.target.value)}
+              autoFocus
+            />
+            <button type="submit" className="composer-send">
+              Create Project
+            </button>
+            <button
+              type="button"
+              className="node-action"
+              onClick={() => setCreatingNew(false)}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : null}
 
         <div className="space-y-6 p-5">
           {/* Shared Project Context & Instructions */}
@@ -330,7 +473,7 @@ export function ProjectDesk() {
               <div className="mt-2.5 flex items-center justify-between">
                 <span className="text-[11px] text-[var(--muted)]">
                   {saved
-                    ? "✓ Project instructions saved and active for new runs."
+                    ? "✓ Project instructions saved to your localized workspace."
                     : "Crew turns in this project automatically inherit this context."}
                 </span>
                 <button
@@ -394,34 +537,29 @@ export function ProjectDesk() {
           </section>
 
           {/* Aggregated Project Charts & Graphs */}
-          {allNodes.length > 0 ? (
-            (() => {
-              const econ = buildRunEconomicModel({
-                question: project.description || project.title,
-                scope: snapshots.find((s) => s.scope)?.scope ?? null,
-                nodes: allNodes,
-                fredSeries,
-              });
-              return (
-                <section className="space-y-4">
-                  <EconomicScorecardBanner scorecard={econ.scorecard} />
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-                    Project-Wide Time-Series Projections, Impulse Responses & Empirical Charts
-                  </p>
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <CounterfactualTrajectoryChart series={econ.counterfactual} />
-                    <ImpulseResponseChart series={econ.impulseResponse} />
-                    <DistributionalIncidenceBarChart
-                      items={econ.incidenceDistribution}
-                    />
-                    <SpineCoverageChart nodes={allNodes} />
-                    {fredSeries.map((series) => (
-                      <FredSeriesChartCard key={series.key} series={series} />
-                    ))}
-                  </div>
-                </section>
-              );
-            })()
+          {projectEcon ? (
+            <section className="space-y-4">
+              <EconomicScorecardBanner scorecard={projectEcon.scorecard} />
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
+                Project-Wide Time-Series Projections, Impulse Responses & Empirical Charts
+              </p>
+              <div className="grid gap-4 lg:grid-cols-2">
+                {projectEcon.counterfactual ? (
+                  <CounterfactualTrajectoryChart series={projectEcon.counterfactual} />
+                ) : null}
+                {projectEcon.impulseResponse ? (
+                  <ImpulseResponseChart series={projectEcon.impulseResponse} />
+                ) : null}
+                <DistributionalIncidenceBarChart
+                  items={projectEcon.incidenceDistribution}
+                  robustness={projectEcon.robustness}
+                />
+                <SpineCoverageChart nodes={allNodes} />
+                {fredSeries.map((series) => (
+                  <FredSeriesChartCard key={series.key} series={series} />
+                ))}
+              </div>
+            </section>
           ) : null}
 
           {/* Compiled Master Brief Across Runs */}

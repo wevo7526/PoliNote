@@ -11,7 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --import ./tests/register-loader.mjs --test tests/econometrics.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.58",

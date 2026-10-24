@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { PoliMark } from "@/components/mark/PoliMark";
@@ -40,12 +40,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [addingProject, setAddingProject] = useState(false);
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
 
   const isSandbox = pathname.startsWith("/app/sandbox");
   const isProjectPage = pathname.startsWith("/app/project");
   const isRunSpace = SPACES.some(
     (space) => pathname === space.href || pathname.startsWith(`${space.href}/`),
   );
+
+  // Close mobile drawer automatically on route changes
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname, activeId, activeProjectId]);
 
   const toggleProjectCollapse = (projectId: string) => {
     setCollapsedProjects((prev) => ({
@@ -60,14 +67,79 @@ export function AppShell({ children }: { children: ReactNode }) {
     setNewProjectTitle("");
     setAddingProject(false);
     const created = await createProject({ title });
-    if (created) {
-      selectProject(created.id, true);
+    setCollapsedProjects((prev) => ({ ...prev, [created.id]: false }));
+    selectProject(created.id, true);
+    setMobileMenuOpen(false);
+  };
+
+  const handleCopyShareLink = async () => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (activeId) url.searchParams.set("run", activeId);
+    url.searchParams.set("readonly", "1");
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setShareCopied(true);
+      window.setTimeout(() => setShareCopied(false), 2000);
+    } catch {
+      /* ignore clipboard error */
     }
   };
 
   return (
     <div className="studio flex h-dvh min-h-0 overflow-hidden">
-      <aside className="run-sidebar flex h-full min-h-0 flex-col">
+      {/* Mobile Compact Header Bar (visible <= 860px) */}
+      <div className="mobile-shell-bar">
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            className="mobile-drawer-toggle"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            aria-expanded={mobileMenuOpen}
+            aria-label="Toggle projects and runs drawer"
+          >
+            {mobileMenuOpen ? "✕ Close" : "☰ Projects"}
+          </button>
+          <Link href="/" className="flex items-center gap-2 text-[var(--ink)]">
+            <PoliMark className="h-6 w-6" />
+            <span className="font-[family-name:var(--font-display)] text-base leading-none tracking-tight">
+              PoliNote
+            </span>
+          </Link>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className="node-action text-[var(--copper)]"
+            disabled={creating}
+            onClick={() => void newRun(activeProjectId ?? undefined)}
+          >
+            + Run
+          </button>
+          <Link
+            href="/app/sandbox"
+            className={`sandbox-launch-pill ${isSandbox ? "is-active" : ""}`}
+          >
+            Sandbox
+          </Link>
+        </div>
+      </div>
+
+      {/* Mobile Backdrop */}
+      {mobileMenuOpen ? (
+        <div
+          className="mobile-drawer-backdrop"
+          role="presentation"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      ) : null}
+
+      <aside
+        className={`run-sidebar flex h-full min-h-0 flex-col ${
+          mobileMenuOpen ? "is-mobile-open" : ""
+        }`}
+      >
         <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3.5">
           <Link href="/" className="flex items-center gap-2.5 text-[var(--ink)]">
             <PoliMark className="h-7 w-7" />
@@ -76,14 +148,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                 PoliNote
               </span>
               <span className="mt-0.5 block text-[9px] uppercase tracking-[0.16em] text-[var(--muted)]">
-                Policy Workbench
+                Econometric Workbench
               </span>
             </div>
           </Link>
           <Link
             href="/app/sandbox"
             className={`sandbox-launch-pill ${isSandbox ? "is-active" : ""}`}
-            title="Open the Persona & Macro Sandbox"
+            title="Open the Simulated Perspective Sandbox"
           >
             Sandbox
           </Link>
@@ -116,7 +188,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <input
                 type="text"
                 className="field-input text-xs"
-                placeholder="Project name (e.g., Trade & Industrial Policy)…"
+                placeholder="Project name (e.g., TCJA & Investment)…"
                 value={newProjectTitle}
                 onChange={(event) => setNewProjectTitle(event.target.value)}
                 autoFocus
@@ -151,6 +223,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
               Projects ({projects.length})
             </p>
+            <span
+              className="text-[9px] uppercase tracking-[0.12em] text-[var(--copper)]/80"
+              title="Projects and runs are localized to your browser and session — no account required"
+            >
+              Local session
+            </span>
           </div>
 
           <ul className="space-y-2">
@@ -338,6 +416,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </Link>
                 );
               })}
+              <button
+                type="button"
+                className="workspace-tab text-[var(--copper)]"
+                onClick={() => void handleCopyShareLink()}
+                title="Copy shareable read-only run link"
+              >
+                {shareCopied ? "✓ Link Copied" : "Share Run"}
+              </button>
             </nav>
           </header>
         ) : null}

@@ -2,7 +2,6 @@
 
 import {
   AlignmentType,
-  BorderStyle,
   Document,
   HeadingLevel,
   ImageRun,
@@ -15,7 +14,6 @@ import {
   TextRun,
   WidthType,
 } from "docx";
-import { jsPDF } from "jspdf";
 import type {
   BibliographyEntry,
   ExtractedSeries,
@@ -817,8 +815,12 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
     nodes: activeNodes,
     fredSeries,
   });
-  const counterfactualPng = renderCounterfactualPng(econModel.counterfactual);
-  const impulsePng = renderImpulseResponsePng(econModel.impulseResponse);
+  const counterfactualPng = econModel.counterfactual
+    ? renderCounterfactualPng(econModel.counterfactual)
+    : null;
+  const impulsePng = econModel.impulseResponse
+    ? renderImpulseResponsePng(econModel.impulseResponse)
+    : null;
   const spinePng = renderSpineCoveragePng(activeNodes);
   const mapPng = renderArgumentMapPng(activeNodes, edges);
   const fredPngs = fredSeries.map((s, idx) => ({
@@ -962,60 +964,73 @@ export async function downloadWordReport(bundle: FullReportBundle): Promise<void
       ],
       spacing: { before: 320, after: 160 },
     }),
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      children: [
-        new ImageRun({
-          data: counterfactualPng.bytes,
-          transformation: { width: 580, height: 222 },
-          type: "png",
-        }),
-      ],
-      spacing: { after: 80 },
-    }),
-    new Paragraph({
-      children: [
-        new TextRun({
-          text: `Figure 1 — ${econModel.counterfactual.title}: `,
-          bold: true,
-          size: 19,
-          color: "111319",
-        }),
-        new TextRun({
-          text: `${econModel.counterfactual.subtitle}. Net policy effect by 2030: ${econModel.scorecard.primaryMetricDelta} (${econModel.scorecard.elasticitySummary}).`,
-          size: 19,
-          color: "444754",
-        }),
-      ],
-      spacing: { after: 220 },
-    }),
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      children: [
-        new ImageRun({
-          data: impulsePng.bytes,
-          transformation: { width: 580, height: 222 },
-          type: "png",
-        }),
-      ],
-      spacing: { after: 80 },
-    }),
-    new Paragraph({
-      children: [
-        new TextRun({
-          text: `Figure 2 — ${econModel.impulseResponse.title}: `,
-          bold: true,
-          size: 19,
-          color: "111319",
-        }),
-        new TextRun({
-          text: `${econModel.impulseResponse.subtitle}. Peak response: ${econModel.scorecard.realOutputDelta} (${econModel.scorecard.timeToPeak}).`,
-          size: 19,
-          color: "444754",
-        }),
-      ],
-      spacing: { after: 220 },
-    }),
+  );
+
+  if (counterfactualPng && econModel.counterfactual) {
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [
+          new ImageRun({
+            data: counterfactualPng.bytes,
+            transformation: { width: 580, height: 222 },
+            type: "png",
+          }),
+        ],
+        spacing: { after: 80 },
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: `Figure 1 — ${econModel.counterfactual.title}: `,
+            bold: true,
+            size: 19,
+            color: "111319",
+          }),
+          new TextRun({
+            text: `${econModel.counterfactual.subtitle}. Point estimate: ${econModel.scorecard.primaryMetricDelta} (${econModel.scorecard.elasticitySummary}).`,
+            size: 19,
+            color: "444754",
+          }),
+        ],
+        spacing: { after: 220 },
+      }),
+    );
+  }
+
+  if (impulsePng && econModel.impulseResponse) {
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [
+          new ImageRun({
+            data: impulsePng.bytes,
+            transformation: { width: 580, height: 222 },
+            type: "png",
+          }),
+        ],
+        spacing: { after: 80 },
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: `Figure 2 — ${econModel.impulseResponse.title}: `,
+            bold: true,
+            size: 19,
+            color: "111319",
+          }),
+          new TextRun({
+            text: `${econModel.impulseResponse.subtitle}. Peak response: ${econModel.scorecard.realOutputDelta} (${econModel.scorecard.timeToPeak}).`,
+            size: 19,
+            color: "444754",
+          }),
+        ],
+        spacing: { after: 220 },
+      }),
+    );
+  }
+
+  children.push(
     new Paragraph({
       alignment: AlignmentType.CENTER,
       children: [
@@ -1349,8 +1364,12 @@ export async function downloadPdfReport(bundle: FullReportBundle): Promise<void>
     nodes: activeNodes,
     fredSeries,
   });
-  const counterfactualPng = renderCounterfactualPng(econModel.counterfactual);
-  const impulsePng = renderImpulseResponsePng(econModel.impulseResponse);
+  const counterfactualPng = econModel.counterfactual
+    ? renderCounterfactualPng(econModel.counterfactual)
+    : null;
+  const impulsePng = econModel.impulseResponse
+    ? renderImpulseResponsePng(econModel.impulseResponse)
+    : null;
   const spinePng = renderSpineCoveragePng(activeNodes);
   const mapPng = renderArgumentMapPng(activeNodes, edges);
   const fredPngs = fredSeries.map((s, idx) => ({
@@ -1359,6 +1378,7 @@ export async function downloadPdfReport(bundle: FullReportBundle): Promise<void>
     note: report.figureNotes[idx + 1],
   }));
 
+  const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({ unit: "pt", format: "letter" });
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
@@ -1476,17 +1496,21 @@ export async function downloadPdfReport(bundle: FullReportBundle): Promise<void>
     writeParagraph(captionBody, { size: 9, color: [85, 88, 102] });
   };
 
-  embedPngFigure(
-    counterfactualPng,
-    `Figure 1 — ${econModel.counterfactual.title}`,
-    `${econModel.counterfactual.subtitle}. Net policy effect by 2030: ${econModel.scorecard.primaryMetricDelta} (${econModel.scorecard.elasticitySummary}).`,
-  );
+  if (counterfactualPng && econModel.counterfactual) {
+    embedPngFigure(
+      counterfactualPng,
+      `Figure 1 — ${econModel.counterfactual.title}`,
+      `${econModel.counterfactual.subtitle}. Point estimate: ${econModel.scorecard.primaryMetricDelta} (${econModel.scorecard.elasticitySummary}).`,
+    );
+  }
 
-  embedPngFigure(
-    impulsePng,
-    `Figure 2 — ${econModel.impulseResponse.title}`,
-    `${econModel.impulseResponse.subtitle}. Peak response: ${econModel.scorecard.realOutputDelta} (${econModel.scorecard.timeToPeak}).`,
-  );
+  if (impulsePng && econModel.impulseResponse) {
+    embedPngFigure(
+      impulsePng,
+      `Figure 2 — ${econModel.impulseResponse.title}`,
+      `${econModel.impulseResponse.subtitle}. Peak response: ${econModel.scorecard.realOutputDelta} (${econModel.scorecard.timeToPeak}).`,
+    );
+  }
 
   embedPngFigure(
     mapPng,

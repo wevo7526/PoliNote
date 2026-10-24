@@ -192,31 +192,36 @@ export function ResponseCard({
       ) : null}
 
       {/* 4. Inline Time-Series & Economic Charts right inside the Output Panel */}
-      {econModel && turnNodes.length > 0 ? (
+      {econModel && econModel.dataAvailable && turnNodes.length > 0 ? (
         <div className="space-y-3 border-t border-[var(--line)] pt-3">
           <div className="flex items-center justify-between">
             <p className="response-actions-label">
-              Time-Series Projections, FRED Series & Distributional Incidence
+              Live Counterfactual Projections, Jordà Local Projections & Specification Curve
             </p>
           </div>
-          <CounterfactualTrajectoryChart
-            series={econModel.counterfactual}
-            compact
-          />
+          {econModel.counterfactual ? (
+            <CounterfactualTrajectoryChart
+              series={econModel.counterfactual}
+              compact
+            />
+          ) : null}
           {fredSeries.slice(0, 1).map((series) => (
             <FredSeriesChartCard key={series.key} series={series} />
           ))}
           <details className="border border-[var(--line)] bg-[var(--bg)]/45 p-3">
             <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-              View Dynamic Impulse-Response & Distributional Incidence Charts
+              View Jordà Local Projections & Automatic Specification Curve
             </summary>
             <div className="mt-3 space-y-3">
-              <ImpulseResponseChart
-                series={econModel.impulseResponse}
-                compact
-              />
+              {econModel.impulseResponse ? (
+                <ImpulseResponseChart
+                  series={econModel.impulseResponse}
+                  compact
+                />
+              ) : null}
               <DistributionalIncidenceBarChart
                 items={econModel.incidenceDistribution}
+                robustness={econModel.robustness}
               />
             </div>
           </details>

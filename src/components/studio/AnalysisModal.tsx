@@ -226,7 +226,9 @@ export function AnalysisModal({
 
         <div className="modal-body">
           <div className="mb-5 space-y-3">
-            <CounterfactualTrajectoryChart series={nodeTrajectory} compact />
+            {nodeTrajectory ? (
+              <CounterfactualTrajectoryChart series={nodeTrajectory} compact />
+            ) : null}
 
             {seriesChips.map((chip, idx) => {
               const pts = chip.seriesPoints ?? [];

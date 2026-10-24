@@ -17,6 +17,11 @@ type RoleWall = {
   updateNodes: boolean;
   addPositiveClaims: boolean;
   attachSpans: boolean;
+  /**
+   * Under the strict econometric lifecycle, NO LLM agent role can directly mark a claim
+   * `supported`. Only deterministic code (`evaluateClaimStatusFromEstimate`) sets `supported`
+   * after checking the estimate CI, pre-trend test, and robustness pass rate.
+   */
   markSupported: boolean;
   writeDraft: boolean;
   flag: boolean;
@@ -36,82 +41,71 @@ const ALL_KINDS: DigressionNodeKind[] = [
 export const ROLE_WALLS: Record<CrewRole, RoleWall> = {
   scoper: {
     writeScope: true,
-    addNodes: false,
-    kinds: [],
+    addNodes: true,
+    kinds: ["constraint", "claim", "fork"],
     updateNodes: false,
-    addPositiveClaims: false,
-    attachSpans: false,
-    markSupported: false,
-    writeDraft: false,
-    flag: false,
-  },
-  instrument_parser: {
-    writeScope: false,
-    addNodes: true,
-    kinds: ["claim", "mechanism"],
-    updateNodes: true,
     addPositiveClaims: true,
     attachSpans: false,
     markSupported: false,
     writeDraft: false,
     flag: false,
   },
-  literature: {
-    writeScope: false,
-    addNodes: true,
-    kinds: "*",
-    updateNodes: true,
-    addPositiveClaims: true,
-    attachSpans: true,
-    markSupported: true,
-    writeDraft: false,
-    flag: false,
-  },
-  series: {
+  data_scout: {
     writeScope: false,
     addNodes: true,
     kinds: ["evidence"],
     updateNodes: true,
     addPositiveClaims: false,
     attachSpans: true,
-    markSupported: true,
+    markSupported: false,
     writeDraft: false,
-    flag: false,
+    flag: true,
   },
-  legal: {
+  identification_strategist: {
     writeScope: false,
     addNodes: true,
-    kinds: ["constraint", "evidence"],
-    updateNodes: true,
-    addPositiveClaims: false,
-    attachSpans: true,
-    markSupported: true,
-    writeDraft: false,
-    flag: false,
-  },
-  macro: {
-    writeScope: false,
-    addNodes: true,
-    kinds: ["evidence", "mechanism"],
-    updateNodes: true,
-    addPositiveClaims: false,
-    attachSpans: true,
-    markSupported: true,
-    writeDraft: false,
-    flag: false,
-  },
-  incidence: {
-    writeScope: false,
-    addNodes: true,
-    kinds: ["incidence"],
+    kinds: ["mechanism", "counterfactual", "uncertainty"],
     updateNodes: true,
     addPositiveClaims: true,
     attachSpans: false,
     markSupported: false,
     writeDraft: false,
+    flag: true,
+  },
+  econometrician: {
+    writeScope: false,
+    addNodes: true,
+    kinds: ["evidence", "claim", "counterfactual", "incidence"],
+    updateNodes: true,
+    addPositiveClaims: false,
+    attachSpans: true,
+    markSupported: false,
+    writeDraft: false,
     flag: false,
   },
-  critic: {
+  literature_analyst: {
+    writeScope: false,
+    addNodes: true,
+    kinds: "*",
+    updateNodes: true,
+    addPositiveClaims: true,
+    attachSpans: true,
+    markSupported: false,
+    writeDraft: false,
+    flag: false,
+  },
+  skeptic: {
+    writeScope: false,
+    addNodes: true,
+    kinds: ["uncertainty", "fork", "counterfactual"],
+    updateNodes: true,
+    addPositiveClaims: false,
+    attachSpans: false,
+    markSupported: false,
+    writeDraft: false,
+    flag: true,
+  },
+  data_auditor: {
     writeScope: false,
     addNodes: false,
     kinds: [],
@@ -144,10 +138,89 @@ export const ROLE_WALLS: Record<CrewRole, RoleWall> = {
     writeDraft: false,
     flag: false,
   },
+  // Legacy compatibility roles
+  instrument_parser: {
+    writeScope: false,
+    addNodes: true,
+    kinds: ["claim", "mechanism"],
+    updateNodes: true,
+    addPositiveClaims: true,
+    attachSpans: false,
+    markSupported: false,
+    writeDraft: false,
+    flag: false,
+  },
+  literature: {
+    writeScope: false,
+    addNodes: true,
+    kinds: "*",
+    updateNodes: true,
+    addPositiveClaims: true,
+    attachSpans: true,
+    markSupported: false,
+    writeDraft: false,
+    flag: false,
+  },
+  series: {
+    writeScope: false,
+    addNodes: true,
+    kinds: ["evidence"],
+    updateNodes: true,
+    addPositiveClaims: false,
+    attachSpans: true,
+    markSupported: false,
+    writeDraft: false,
+    flag: false,
+  },
+  legal: {
+    writeScope: false,
+    addNodes: true,
+    kinds: ["constraint", "evidence"],
+    updateNodes: true,
+    addPositiveClaims: false,
+    attachSpans: true,
+    markSupported: false,
+    writeDraft: false,
+    flag: false,
+  },
+  macro: {
+    writeScope: false,
+    addNodes: true,
+    kinds: ["evidence", "mechanism"],
+    updateNodes: true,
+    addPositiveClaims: false,
+    attachSpans: true,
+    markSupported: false,
+    writeDraft: false,
+    flag: false,
+  },
+  incidence: {
+    writeScope: false,
+    addNodes: true,
+    kinds: ["incidence"],
+    updateNodes: true,
+    addPositiveClaims: true,
+    attachSpans: false,
+    markSupported: false,
+    writeDraft: false,
+    flag: false,
+  },
+  critic: {
+    writeScope: false,
+    addNodes: false,
+    kinds: [],
+    updateNodes: true,
+    addPositiveClaims: false,
+    attachSpans: false,
+    markSupported: false,
+    writeDraft: false,
+    flag: true,
+  },
 };
 
 export function allowRoleAction(role: CrewRole, action: RoleAction): boolean {
   const wall = ROLE_WALLS[role];
+  if (!wall) return false;
   switch (action.type) {
     case "write_scope":
       return wall.writeScope;

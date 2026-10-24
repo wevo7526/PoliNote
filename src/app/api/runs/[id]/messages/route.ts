@@ -7,8 +7,9 @@ import {
 import { draftsFromCrewEvent } from "@/lib/ai/run-log";
 import type { RunEventDraft } from "@/lib/db/events";
 import { getProjectContextDigest } from "@/lib/db/projects";
-import { assertRunExists, getRun, persistTurn } from "@/lib/db/runs";
+import { assertRunExists, createRun, getRun, persistTurn } from "@/lib/db/runs";
 import { redactSecrets } from "@/lib/mcp/http";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { getSessionUserId } from "@/lib/session";
 import type { RunSnapshot } from "@/lib/platform-types";
 import type { ThreadItem } from "@/components/studio/thread-types";
@@ -40,16 +41,36 @@ async function persistSnapshot(userId: string, snapshot: RunSnapshot): Promise<v
 
 export async function POST(request: Request, ctx: RouteCtx) {
   const userId = await getSessionUserId();
+  const rate = checkRateLimit(`messages:${userId}`, 25, 60_000);
+  if (!rate.allowed) {
+    return Response.json(
+      {
+        error: `Rate limit reached. Please wait ${Math.ceil(rate.resetInMs / 1000)}s before running another turn.`,
+      },
+      { status: 429 },
+    );
+  }
   const { id: runId } = await ctx.params;
 
-  if (!(await assertRunExists(userId, runId))) {
-    return Response.json({ error: "Run not found" }, { status: 404 });
-  }
-
-  const body = (await request.json()) as { text?: unknown };
+  const body = (await request.json().catch(() => ({}))) as {
+    text?: unknown;
+    projectId?: unknown;
+    projectContext?: unknown;
+  };
   const text = typeof body.text === "string" ? body.text.trim() : "";
   if (!text) {
     return Response.json({ error: "Message required" }, { status: 400 });
+  }
+
+  const reqProjectId =
+    typeof body.projectId === "string" ? body.projectId.trim() : undefined;
+
+  if (!(await assertRunExists(userId, runId))) {
+    await createRun(userId, {
+      id: runId,
+      projectId: reqProjectId,
+      title: text.slice(0, 64),
+    });
   }
 
   const current = await getRun(userId, runId);
@@ -57,11 +78,14 @@ export async function POST(request: Request, ctx: RouteCtx) {
     return Response.json({ error: "Run not found" }, { status: 404 });
   }
 
-  const projectContext = await getProjectContextDigest(
+  const dbProjectContext = await getProjectContextDigest(
     userId,
-    current.run.projectId,
+    current.run.projectId ?? reqProjectId,
     runId,
   ).catch(() => "");
+  const clientProjectContext =
+    typeof body.projectContext === "string" ? body.projectContext.trim() : "";
+  const projectContext = dbProjectContext || clientProjectContext;
 
   const userItem: Extract<ThreadItem, { kind: "user" }> = {
     id: crypto.randomUUID(),

@@ -37,15 +37,22 @@ export function humanAgent(agent: string | undefined): string {
   if (!agent) return "Crew";
   const names: Record<string, string> = {
     scoper: "Scoper",
-    instrument_parser: "Instrument parser",
-    literature: "Literature",
-    trace_narrator: "Trace",
-    critic: "Critic",
-    incidence: "Incidence",
-    legal: "Legal",
-    series: "Series",
-    macro: "Macro",
+    data_scout: "Data Scout",
+    identification_strategist: "Identification Strategist",
+    econometrician: "Econometrician",
+    literature_analyst: "Literature Analyst",
+    skeptic: "Skeptic / Red Team",
+    data_auditor: "Data Auditor (Code)",
     synthesizer: "Synthesizer",
+    trace_narrator: "Trace Narrator",
+    // Legacy compatibility labels
+    instrument_parser: "Data Scout",
+    literature: "Literature Analyst",
+    series: "Econometrician",
+    legal: "Policy Docs",
+    macro: "Econometrician",
+    incidence: "Econometrician",
+    critic: "Skeptic / Red Team",
   };
   return names[agent] ?? agent.replace(/_/g, " ");
 }
@@ -59,7 +66,7 @@ export function eventLabel(event: RunEvent): string {
     case "run.failed":
       return typeof payload.message === "string" ? payload.message : "Run failed";
     case "scope.updated":
-      return "Scope contract written";
+      return "Scope contract & pre-registration locked";
     case "agent.turn_started":
       return `${humanAgent(event.agent)} started`;
     case "agent.turn_completed":
@@ -71,14 +78,14 @@ export function eventLabel(event: RunEvent): string {
     case "edge.created":
       return "Edge added";
     case "critic.flag":
-      return typeof payload.message === "string" ? payload.message : "Critic flag";
+      return typeof payload.message === "string" ? payload.message : "Skeptic / Auditor flag";
     case "llm.call":
       return "Model call";
     case "mcp.tool_call":
     case "mcp.tool_result":
-      return typeof payload.label === "string" ? payload.label : "MCP call";
+      return typeof payload.label === "string" ? payload.label : "Live data pull";
     case "export.generated":
-      return "Draft written";
+      return "Audited synthesis written";
     default:
       return event.type.replace(/\./g, " · ");
   }

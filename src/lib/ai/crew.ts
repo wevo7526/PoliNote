@@ -14,6 +14,11 @@ import {
   streamMcpSpecialists,
   streamTraceNarrator,
 } from "@/lib/ai/crew-specialists";
+import {
+  auditGeneratedProseNumbers,
+  buildAllowedNumericRegistry,
+} from "@/lib/economics/auditor";
+import type { EconometricMethodId } from "@/lib/economics/schemas";
 import { shortNodeKey } from "@/lib/ui/prose";
 import { redactSecrets } from "@/lib/mcp/http";
 import { ensureMcpTools } from "@/lib/mcp/register";
@@ -49,6 +54,8 @@ type ScopeFields = {
 
 type ScopeStep = {
   runTitle: string;
+  hypothesizedDirection: "positive" | "negative" | "ambiguous";
+  preferredMethod: EconometricMethodId;
   scope: ScopeFields;
 };
 
@@ -115,6 +122,17 @@ const METHODS: AllowedMethod[] = [
   "expert_judgment",
 ];
 
+const ECONOMETRIC_METHODS: EconometricMethodId[] = [
+  "event_study",
+  "local_projections_jorda",
+  "arima_forecast_counterfactual",
+  "descriptive_newey_west",
+  "did_twfe",
+  "synthetic_control",
+  "chow_break_test",
+  "bai_perron_break",
+];
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -127,7 +145,6 @@ const ANALYSIS_TIMEOUT_MS = 50_000;
 const NARRATION_OPTIONS = {
   openai: {
     reasoningEffort: "low" as const,
-    // Unverified orgs 400 if the SDK defaults this to "detailed".
     reasoningSummary: null,
   },
 };
@@ -141,26 +158,28 @@ const JSON_OPTIONS = {
 
 const SCOPE_STYLE = `Write every scope field as a dense research-protocol paragraph, not a slogan or one-liner.
 
-objective: Start with "Digress …". State the analytic task, the political coverage, the economic frame, and the first segment to start with before expanding.
+objective: Start with "Digress …". State the analytic task, the hypothesized direction, the unit of analysis, and the policy date(s).
 
-instrument: Inventory the actual tools — appropriations, tax preferences, regulation, procurement, infrastructure, labor, marketing, and any request for federal action. Separate enacted policy, introduced legislation, executive budget proposals, formal campaign platforms, and general rhetoric.
+instrument: Inventory the statutory tools — appropriations, tax rates, tariffs, regulation, procurement, or monetary rules. Separate enacted policy from proposals.
 
-target: Name the populations on both sides of the tradeoff and the outcome metrics you will benchmark (output, prices, employment, import share, public cost, resilience), including the comparison group.
+target: Name the outcome series to be estimated, the unit of analysis, geography, and treatment/control candidates.
 
-identificationStrategy: Name the documentary inventory and the estimators (interrupted time series, difference-in-differences, event study, partial-equilibrium or input-output counterfactuals, benefit-incidence). List confounders. State what you will not treat as causal: partisan sponsorship, temporal coincidence, or stated intent.
+identificationStrategy: Name the econometric estimator from the catalog (Event Study, Jordà Local Projections, Difference-in-Differences, Synthetic Control, ARIMA Counterfactual, Chow/Bai-Perron Break Test), its identifying assumptions, and named confounders in the observation window.
 
-horizon: Give explicit retrospective and prospective dates, and name the first segment to finish before considering expansion.
+horizon: Give explicit pre-policy and post-policy dates (at least 5 years pre-policy through latest available).
 
-jurisdiction: Name the polity and the higher-law constraints (interstate commerce, international trade, federal farm/labor/safety/procurement rules).
+jurisdiction: Name the polity and higher-law constraints.
 
-baseline: The no-new-policy continuation as of the horizon's end date, what stays fixed federally, and the legally available counterfactuals. Note instruments the jurisdiction cannot use.
+baseline: The pre-policy counterfactual trajectory absent the policy intervention.
 
-distributionalCut: Who pays and who gains along the supply chain and by region or income where the question requires it.`;
+distributionalCut: Who bears the economic vs. statutory incidence across households, firms, labor, and public budgets.`;
 
 function isModelUnavailable(error: unknown): boolean {
   const raw = error instanceof Error ? error.message : String(error);
-  return /model|not found|does not exist|invalid_request|unsupported/i.test(raw) &&
-    /model|gpt-|response_format|not found|does not exist|unsupported/i.test(raw);
+  return (
+    /model|not found|does not exist|invalid_request|unsupported/i.test(raw) &&
+    /model|gpt-|response_format|not found|does not exist|unsupported/i.test(raw)
+  );
 }
 
 export function hasAiCredentials(): boolean {
@@ -210,10 +229,10 @@ function createModelSlot(): ModelSlot {
   };
 }
 
-const AUTONOMY = `Infer missing policy details from the question and proceed. Do not ask clarifying questions. Do not stop for approval. Fill working values. Never mark a node supported.
-Cite only real literature and official sources from the provided webLeads: NBER, journals, CRS, CBO, GAO, FRED/BLS/BEA, IMF, OECD, World Bank, Congress/govinfo, and comparable research shops.
-Never cite Facebook, Reddit, Twitter/X, TikTok, Instagram, YouTube, LinkedIn, Quora, Wikipedia, Medium, Substack, or any social / user-generated page.
-Never invent a paper, URL, or working-paper number. If a lead is missing, say the evidence is missing.`;
+const AUTONOMY = `Infer missing policy details from the question and proceed. Do not ask clarifying questions.
+NON-NEGOTIABLE NUMERIC RULE: You (the LLM) must NEVER invent, guess, or fabricate any number, percentage, elasticity, or series value.
+Only cite exact numbers present in the provided econometric estimates, live observations, or quote-backed literature. If a number is not in the provided data, do not write a number—state that live data is required.
+Never mark a node supported. Cite only real literature and official sources.`;
 
 function slugKey(key: string): string {
   return key
@@ -239,7 +258,11 @@ function asString(value: unknown, fallback: string): string {
   return fallback;
 }
 
-function pick<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+function pick<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback: T,
+): T {
   const raw =
     typeof value === "string"
       ? value.trim().toLowerCase().replace(/[\s-]+/g, "_")
@@ -250,7 +273,9 @@ function pick<T extends string>(value: unknown, allowed: readonly T[], fallback:
 function isAbortError(error: unknown): boolean {
   return (
     (error instanceof Error && error.name === "AbortError") ||
-    /aborted|abort|timeout/i.test(error instanceof Error ? error.message : String(error))
+    /aborted|abort|timeout/i.test(
+      error instanceof Error ? error.message : String(error),
+    )
   );
 }
 
@@ -310,22 +335,32 @@ function fallbackScope(question: string): ScopeFields {
   const q = question.trim() || "the stated policy question";
   return {
     jurisdiction:
-      "The polity named in the question, including federal or higher-law constraints that bind the instrument: interstate commerce, international trade, farm programs, labor, food safety, and procurement.",
+      "The polity named in the question, including statutory and higher-law constraints that bind the policy instrument.",
     horizon:
-      "Retrospective review of the last ten years of proposals and enacted policy, with prospective economic effects assessed over the following decade, unless the question names other dates. Finish the first named segment before expanding.",
-    objective: `Digress a structured analysis of ${q}. Separate enacted policy, introduced legislation, executive proposals, campaign platforms, and rhetoric. Build the argument around the economic tradeoff the question names or implies, starting with the smallest concrete segment before expanding.`,
+      "At least 6 years of pre-policy historical observations through the latest available release date to test pre-trends and dynamic post-policy responses.",
+    objective: `Digress a pre-registered econometric and institutional analysis of ${q}. Separate statutory authority, transmission mechanisms, live empirical series, and distributional incidence.`,
     instrument:
-      "The policy tools named or implied in the question — appropriations, tax preferences, regulation, procurement, infrastructure, labor measures, and any request for federal tariff, trade, immigration, or farm-policy action. Separate enacted instruments from introduced bills, executive budget proposals, formal platforms, and general political rhetoric.",
+      "The concrete policy instrument named or implied in the question — tariffs, tax provisions, appropriations, regulatory mandates, or monetary rules.",
     target:
-      "The producers, workers, purchasers, and consumers on both sides of the localization-versus-import tradeoff, with outcomes benchmarked against the relevant comparison suppliers. Primary outcomes are output, prices, employment, import or inbound-shipment share, public expenditure, and supply resilience.",
+      "Primary macroeconomic and sector outcome series fetched live from official statistical providers (FRED/ALFRED, BEA, BLS, Census, World Bank).",
     identificationStrategy:
-      "Construct a proposal-level inventory from official legislation, budgets, executive documents, verifiable campaign materials, Congress or govinfo records, and official economic data. Estimate effects with interrupted time series, difference-in-differences, event studies, partial-equilibrium or input-output counterfactuals, and benefit-incidence analysis where those designs are credible. Do not infer causation from partisan sponsorship, temporal coincidence, or stated intent alone.",
+      "Pre-registered Event Study with lead/lag pre-trend F-test and Jordà Local Projections with Newey–West HAC standard errors, supplemented by automatic specification curve robustness checks across windows, transforms, and in-time placebos.",
     distributionalCut:
-      "Winners and losers along the supply chain — producers, processors, distributors, workers, institutional buyers, and consumers — and by region or income where the question requires it.",
+      "Statutory vs. economic incidence across households, domestic producers, downstream input-using firms, workers, and public budgets.",
     baseline:
-      "Continuation of policies in force at the end of the retrospective window, with sourcing following prevailing seasonal, interstate, and international patterns and no new localization mandate. Federal trade and immigration law stays fixed in the central baseline. Counterfactuals may only use instruments the jurisdiction can legally deploy.",
-    allowedMethods: ["literature", "time_series", "legal_text", "macro", "incidence", "counterfactual"],
-    forbiddenMoves: ["Do not mark nodes supported without an MCP evidence span"],
+      "Pre-policy counterfactual trajectory projected forward with explicit confidence intervals.",
+    allowedMethods: [
+      "literature",
+      "time_series",
+      "legal_text",
+      "macro",
+      "incidence",
+      "counterfactual",
+    ],
+    forbiddenMoves: [
+      "Never fabricate or hard-code economic numbers",
+      "Never mark claims supported without a computed econometric estimate",
+    ],
   };
 }
 
@@ -334,80 +369,80 @@ function fallbackGraph(scope: ScopeFields): GraphStep {
     text.length > n ? `${text.slice(0, n).trim()}…` : text;
   const nodes: RawNode[] = [
     {
-      key: "claim_core",
-      kind: "claim",
+      key: "con_legal",
+      kind: "constraint",
       status: "proposed",
-      title: "Core policy claim",
-      body: clip(scope.objective, 360),
+      title: "Statutory instrument & authority",
+      body: clip(scope.instrument, 340),
       confidence: "unknown",
-      agent: "literature",
-      analysisTitle: "Core policy claim",
-      analysis: scope.objective,
+      agent: "scoper",
+      analysisTitle: "Statutory instrument & authority",
+      analysis: scope.instrument,
     },
     {
       key: "mech_channel",
       kind: "mechanism",
       status: "proposed",
-      title: "Transmission mechanism",
-      body: clip(scope.instrument, 360),
-      confidence: "medium",
-      agent: "literature",
-      analysisTitle: "Transmission mechanism",
-      analysis: scope.instrument,
+      title: "Transmission mechanism & identification",
+      body: clip(scope.identificationStrategy, 340),
+      confidence: "unknown",
+      agent: "identification_strategist",
+      analysisTitle: "Transmission mechanism & identification",
+      analysis: scope.identificationStrategy,
+    },
+    {
+      key: "claim_core",
+      kind: "claim",
+      status: "proposed",
+      title: "Primary testable policy claim",
+      body: clip(scope.objective, 340),
+      confidence: "unknown",
+      agent: "scoper",
+      analysisTitle: "Primary testable policy claim",
+      analysis: scope.objective,
     },
     {
       key: "inc_winners",
       kind: "incidence",
       status: "proposed",
-      title: "Incidence of the tradeoff",
-      body: clip(scope.distributionalCut, 360),
-      confidence: "medium",
-      agent: "incidence",
-      analysisTitle: "Incidence of the tradeoff",
+      title: "Distributional & sectoral incidence",
+      body: clip(scope.distributionalCut, 340),
+      confidence: "unknown",
+      agent: "econometrician",
+      analysisTitle: "Distributional & sectoral incidence",
       analysis: scope.distributionalCut,
     },
     {
       key: "unc_id",
       kind: "uncertainty",
       status: "contested",
-      title: "Identification limits",
-      body: clip(scope.identificationStrategy, 360),
-      confidence: "low",
-      agent: "critic",
-      analysisTitle: "Identification limits",
+      title: "Skeptic red-team critique & confounders",
+      body: "Evaluates contemporaneous macro shocks, reverse causality, pre-trend stability, and specification curve fragility.",
+      confidence: "unknown",
+      agent: "skeptic",
+      analysisTitle: "Skeptic red-team critique & confounders",
       analysis: scope.identificationStrategy,
     },
     {
       key: "cf_baseline",
       kind: "counterfactual",
       status: "proposed",
-      title: "No-policy continuation",
-      body: clip(scope.baseline, 360),
-      confidence: "medium",
-      agent: "literature",
-      analysisTitle: "No-policy continuation",
+      title: "Pre-policy counterfactual & fork candidate",
+      body: clip(scope.baseline, 340),
+      confidence: "unknown",
+      agent: "identification_strategist",
+      analysisTitle: "Pre-policy counterfactual & fork candidate",
       analysis: scope.baseline,
-    },
-    {
-      key: "con_legal",
-      kind: "constraint",
-      status: "proposed",
-      title: "Legal and jurisdictional bounds",
-      body: clip(scope.jurisdiction, 360),
-      confidence: "high",
-      agent: "legal",
-      analysisTitle: "Legal and jurisdictional bounds",
-      analysis: scope.jurisdiction,
     },
   ];
   return {
     nodes,
     edges: [
+      { sourceKey: "con_legal", targetKey: "mech_channel", kind: "depends_on" },
       { sourceKey: "mech_channel", targetKey: "claim_core", kind: "supports" },
       { sourceKey: "claim_core", targetKey: "inc_winners", kind: "causal" },
       { sourceKey: "unc_id", targetKey: "claim_core", kind: "attacks" },
       { sourceKey: "cf_baseline", targetKey: "claim_core", kind: "alternatives" },
-      { sourceKey: "con_legal", targetKey: "mech_channel", kind: "depends_on" },
     ],
   };
 }
@@ -420,8 +455,20 @@ function coerceScope(raw: unknown, question: string): ScopeStep {
     .map((item) => pick(item, METHODS, "literature"))
     .concat(["literature", "time_series", "legal_text", "macro", "incidence"])
     .filter((item, index, all) => all.indexOf(item) === index);
+  const hypothesizedDirection = pick(
+    root.hypothesizedDirection,
+    ["positive", "negative", "ambiguous"] as const,
+    "ambiguous",
+  );
+  const preferredMethod = pick(
+    root.preferredMethod,
+    ECONOMETRIC_METHODS,
+    "event_study",
+  );
   return {
     runTitle: asString(root.runTitle, question).slice(0, 80),
+    hypothesizedDirection,
+    preferredMethod,
     scope: {
       jurisdiction: asString(scope.jurisdiction, fallback.jurisdiction),
       horizon: asString(scope.horizon, fallback.horizon),
@@ -432,13 +479,20 @@ function coerceScope(raw: unknown, question: string): ScopeStep {
         scope.identificationStrategy,
         fallback.identificationStrategy,
       ),
-      distributionalCut: asString(scope.distributionalCut, fallback.distributionalCut),
+      distributionalCut: asString(
+        scope.distributionalCut,
+        fallback.distributionalCut,
+      ),
       baseline: asString(scope.baseline, fallback.baseline),
-      allowedMethods: methods.length > 0 ? methods : ["literature", "expert_judgment"],
+      allowedMethods:
+        methods.length > 0 ? methods : ["literature", "expert_judgment"],
       forbiddenMoves: asArray(scope.forbiddenMoves)
         .map((item) => asString(item, ""))
         .filter(Boolean)
-        .concat(["Do not mark nodes supported without an MCP evidence span"])
+        .concat([
+          "Never fabricate economic numbers",
+          "Never mark nodes supported without a computed econometric estimate",
+        ])
         .slice(0, 8),
     },
   };
@@ -457,7 +511,7 @@ function coerceNode(raw: unknown, index: number): RawNode | null {
     title: title || key.replace(/_/g, " "),
     body,
     confidence: pick(node.confidence, CONFIDENCE, "unknown"),
-    agent: asString(node.agent, "literature"),
+    agent: asString(node.agent, "literature_analyst"),
     analysisTitle: asString(node.analysisTitle, title || "Analysis"),
     analysis: asString(node.analysis, body),
   };
@@ -465,24 +519,26 @@ function coerceNode(raw: unknown, index: number): RawNode | null {
 
 function stubAnalysis(node: RawNode): string {
   return [
-    "## Mechanism & Elasticity",
-    `${node.body} Evaluates first-order price, cost, and supply-response elasticities along the policy transmission channel.`,
+    "## Mechanism",
+    `${node.body}`,
     "",
-    "## Empirical Time-Series & Baseline",
-    "Benchmarked against historical pre-policy trends and the status-quo continuation trajectory over the scope horizon.",
+    "## Identification",
+    "Evaluated via pre-registered econometric specification on live provider series with Newey–West HAC standard errors.",
     "",
-    "## Distributional Incidence",
+    "## Incidence",
     "Separates statutory compliance from economic incidence across households, domestic producers, downstream firms, labor, and public revenue.",
     "",
-    "## Identification & Confounders",
-    "Evaluated via quasi-experimental and time-series benchmarks while isolating macro demand, input-cost, and monetary confounders.",
+    "## Sign flip",
+    "Tested automatically across alternative observation windows, transforms, controls, and in-time placebo dates.",
     "",
-    "## Sign-Flip Conditions",
-    "The estimated effect can attenuate or flip sign if supply elasticities, trading-partner retaliation, or exemption leakage exceed baseline bounds.",
+    "## Missing evidence",
+    "Awaiting live series observations and quote-backed literature spans.",
   ].join("\n");
 }
 
-function parseAnalyses(text: string): Map<string, { title: string; body: string }> {
+function parseAnalyses(
+  text: string,
+): Map<string, { title: string; body: string }> {
   const map = new Map<string, { title: string; body: string }>();
   const chunks = text.split(/^@@\s*([a-z0-9_]+)\s*@@/im);
   for (let i = 1; i < chunks.length; i += 2) {
@@ -522,8 +578,8 @@ function coerceGraph(raw: unknown): GraphStep {
   if (edges.length === 0 && nodes.length > 1) {
     for (let i = 0; i < nodes.length - 1; i += 1) {
       edges.push({
-        sourceKey: nodes[i].key,
-        targetKey: nodes[i + 1].key,
+        sourceKey: nodes[i]!.key,
+        targetKey: nodes[i + 1]!.key,
         kind: "elaborates",
       });
     }
@@ -568,6 +624,7 @@ function hydrateNode(
   raw: RawNode,
   web: WebHit[],
   ts: string,
+  hypothesizedDirection?: "positive" | "negative" | "ambiguous",
 ): DigressionNode {
   const key = slugKey(raw.key) || "node";
   return {
@@ -577,13 +634,17 @@ function hydrateNode(
     status: raw.status === "supported" ? "proposed" : raw.status,
     title: raw.title,
     body: raw.body,
-    confidence: raw.confidence,
+    confidence: "unknown",
+    hypothesizedDirection:
+      raw.kind === "claim" ? hypothesizedDirection : undefined,
     agent: raw.agent,
-    provenance: filterReputableHits(web).slice(0, 2).map((hit) => ({
-      source: "web" as const,
-      label: hit.title,
-      url: hit.url,
-    })),
+    provenance: filterReputableHits(web)
+      .slice(0, 2)
+      .map((hit) => ({
+        source: "web" as const,
+        label: hit.title,
+        url: hit.url,
+      })),
     position: { x: 0, y: 0 },
     evidenceSpanIds: [],
     createdAt: ts,
@@ -600,7 +661,10 @@ function hydrateEdge(
   ts: string,
 ): DigressionEdge {
   return {
-    id: `${runId}_e_${slugKey(sourceId)}_${slugKey(targetId)}_${kind}`.slice(0, 80),
+    id: `${runId}_e_${slugKey(sourceId)}_${slugKey(targetId)}_${kind}`.slice(
+      0,
+      80,
+    ),
     runId,
     sourceId,
     targetId,
@@ -610,7 +674,11 @@ function hydrateEdge(
   };
 }
 
-function hydrateAnalysis(runId: string, raw: RawNode, web: WebHit[]): NodeAnalysis {
+function hydrateAnalysis(
+  runId: string,
+  raw: RawNode,
+  web: WebHit[],
+): NodeAnalysis {
   return {
     nodeId: `${runId}_${slugKey(raw.key)}`,
     runId,
@@ -622,63 +690,6 @@ function hydrateAnalysis(runId: string, raw: RawNode, web: WebHit[]): NodeAnalys
       note: hit.snippet || undefined,
     })),
   };
-}
-
-async function* streamNarration(input: {
-  agent: string;
-  system: string;
-  prompt: string;
-  fallback: string;
-  model: ModelSlot;
-}): AsyncGenerator<CrewStreamEvent, string> {
-  const id = crypto.randomUUID();
-  let useReasoning = true;
-  for (;;) {
-    try {
-      const result = streamText({
-        model: resolveAiModel(input.model.id),
-        providerOptions: useReasoning ? NARRATION_OPTIONS : undefined,
-        system: `${AUTONOMY}\n${input.system}`,
-        prompt: input.prompt,
-      });
-      let full = "";
-      for await (const delta of result.textStream) {
-        if (!delta) continue;
-        full += delta;
-        yield {
-          type: "narration_delta",
-          id,
-          agent: input.agent,
-          delta,
-        };
-      }
-      if (full.trim()) return full;
-      break;
-    } catch (error) {
-      console.error(
-        "[polinote/crew] narration failed",
-        input.agent,
-        input.model.id,
-        error instanceof Error ? redactSecrets(error.message) : "narration error",
-      );
-      if (isReasoningSummaryError(error) && useReasoning) {
-        useReasoning = false;
-        continue;
-      }
-      if (isModelUnavailable(error) && input.model.demote()) continue;
-      break;
-    }
-  }
-  yield {
-    type: "narration",
-    item: {
-      id,
-      kind: "narration",
-      agent: input.agent,
-      text: input.fallback,
-    },
-  };
-  return input.fallback;
 }
 
 async function askJson(
@@ -694,7 +705,7 @@ async function askJson(
         model: resolveAiModel(model.id),
         providerOptions: useReasoning ? JSON_OPTIONS : undefined,
         abortSignal: timeout.signal,
-        system: `${AUTONOMY}\n${system}\nReturn ONLY a compact JSON object. No markdown fences. Keep string values short.`,
+        system: `${AUTONOMY}\n${system}\nReturn ONLY a compact JSON object. No markdown fences. Keep string values concise.`,
         prompt,
       });
       return extractJson(text);
@@ -734,12 +745,12 @@ Write a short analysis for EACH node. For every node emit a marker line, then ma
 
 @@key@@
 ## Mechanism
-## Incidence
 ## Identification
+## Incidence
 ## Sign flip
 ## Missing evidence
 
-One short paragraph per section. Cite only the provided webLeads. Never invent papers or URLs. Never use supported.`,
+One short paragraph per section. Cite ONLY numbers present in the provided estimates or mcpSpans. Never invent numbers, papers, or URLs.`,
         prompt,
       });
       return parseAnalyses(text);
@@ -780,15 +791,8 @@ export async function* streamCrewTurn(input: {
   const model = createModelSlot();
   const ts = nowIso();
   const revising = (input.prior?.nodeKeys.length ?? 0) > 0;
-  yield workingStatus("Gathering web leads…");
+  yield workingStatus("Step 1/7 · Scoper & Literature intake…");
   const web = await searchPolicyWeb(input.latestMessage || input.question);
-  yield workingStatus(
-    web.length
-      ? `Scoper reading ${web.length} lead${web.length === 1 ? "" : "s"}…`
-      : revising
-        ? "Scoper refining the scope contract…"
-        : "Scoper drafting the scope contract…",
-  );
 
   const context = JSON.stringify({
     question: input.question,
@@ -805,11 +809,13 @@ export async function* streamCrewTurn(input: {
     scopeOut = coerceScope(
       await askJson(
         model,
-        `You are PoliNote's scoper. Return JSON with runTitle and scope.
-scope fields: jurisdiction, horizon, objective, instrument, target, identificationStrategy, distributionalCut, baseline, allowedMethods (from literature, time_series, legal_text, macro, incidence, counterfactual, expert_judgment), forbiddenMoves.
+        `You are PoliNote's Scoper & Identification Strategist. Return JSON with:
+- runTitle (max 80 chars)
+- hypothesizedDirection ("positive" | "negative" | "ambiguous")
+- preferredMethod ("event_study" | "local_projections_jorda" | "arima_forecast_counterfactual" | "descriptive_newey_west" | "did_twfe" | "synthetic_control")
+- scope: { jurisdiction, horizon, objective, instrument, target, identificationStrategy, distributionalCut, baseline, allowedMethods, forbiddenMoves }
 ${SCOPE_STYLE}
-${revising ? "A scope already exists. Refine it. Do not shrink fields into slogans." : "Write specific working values for THIS question."}
-Each field is one dense paragraph (3–5 sentences). runTitle max 80 chars.`,
+Do not invent any empirical numbers in the scope.`,
         context,
       ),
       input.question,
@@ -836,7 +842,7 @@ Each field is one dense paragraph (3–5 sentences). runTitle max 80 chars.`,
       id: crypto.randomUUID(),
       kind: "narration",
       agent: "scoper",
-      text: `Locked Scope Contract for “${scopeOut.runTitle}” (${contract.jurisdiction.split(".")[0]}). Instrument, target benchmark, identification strategy, and horizon are ready for graph assembly.`,
+      text: `Locked Scope Contract for “${scopeOut.runTitle}” (hypothesized direction: ${scopeOut.hypothesizedDirection}, primary estimator: ${scopeOut.preferredMethod}).`,
     },
   };
 
@@ -848,6 +854,7 @@ Each field is one dense paragraph (3–5 sentences). runTitle max 80 chars.`,
     return;
   }
 
+  yield workingStatus("Step 2/7 · Pre-registration lock & Data Scout query planning…");
   const queries = yield* streamInstrumentParser({
     userId: input.userId,
     runId: input.runId,
@@ -860,7 +867,7 @@ Each field is one dense paragraph (3–5 sentences). runTitle max 80 chars.`,
     liveNodes.set(node.id, node);
   }
 
-  yield workingStatus("Literature is placing the policy spine & digressions…");
+  yield workingStatus("Step 3/7 · Identification Strategist & Literature Analyst placing spine…");
 
   let graphOut: GraphStep;
   try {
@@ -870,20 +877,14 @@ Each field is one dense paragraph (3–5 sentences). runTitle max 80 chars.`,
         revising
           ? `Return compact JSON: { "nodes": [...], "edges": [...] }.
 Add 2–4 nodes that extend the existing graph, or revise existing keys.
-Reuse keys when updating. Do not duplicate titles.
-Each node: key, kind, title, body (2 sentences), status (proposed|contested), confidence, agent.
-No analysis fields. Edges: sourceKey, targetKey, kind (supports|attacks|depends_on|elaborates|alternatives|causal).
-Keep the instrument → mechanism → claim → identification → incidence spine intact.
-Put forks, counterfactuals, and uncertainties on that spine with an edge; they are digressions, not a second argument.`
+Each node: key, kind, title, body (2 sentences, NO fabricated numbers), status (proposed|contested), confidence, agent (scoper|identification_strategist|econometrician|literature_analyst|skeptic).
+Edges: sourceKey, targetKey, kind (supports|attacks|depends_on|elaborates|alternatives|causal).`
           : `Return compact JSON: { "nodes": [...], "edges": [...] }.
 Exactly 6 nodes and 5–7 edges that form ONE connected argument under this scope.
 Spine first (required kinds): constraint (instrument), mechanism, claim, incidence.
-Then digressions: uncertainty and either counterfactual or fork.
-Each node: key, kind, title, body (2 sentences), status (proposed|contested), confidence, agent.
-No analysis fields. Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.
-Edges: sourceKey, targetKey, kind (supports|attacks|depends_on|elaborates|alternatives|causal).
-Connect the spine left to right: instrument → mechanism → claim → incidence.
-Attach every digression to a spine node. Do not start a second disconnected argument.`,
+Then digressions: uncertainty (skeptic critique) and either counterfactual or fork.
+Each node: key, kind, title, body (2 sentences, DO NOT invent any statistics or numbers), status (proposed|contested), confidence, agent (scoper|identification_strategist|econometrician|literature_analyst|skeptic).
+Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`,
         JSON.stringify({
           question: input.question,
           latestUserMessage: input.latestMessage,
@@ -918,14 +919,19 @@ Attach every digression to a spine node. Do not start a second disconnected argu
   for (const raw of graphOut.nodes) {
     raw.analysis = stubAnalysis(raw);
     raw.analysisTitle = raw.title;
-    const node = hydrateNode(input.runId, raw, web, ts);
+    const node = hydrateNode(
+      input.runId,
+      raw,
+      web,
+      ts,
+      scopeOut.hypothesizedDirection,
+    );
     keyToId.set(raw.key, node.id);
     keyToId.set(slugKey(raw.key), node.id);
     liveNodes.set(node.id, node);
     yield { type: "node", node };
     yield { type: "analysis", analysis: hydrateAnalysis(input.runId, raw, web) };
 
-    // Immediately emit any edges whose endpoints are now placed so digressions align without jumping
     for (const edge of graphOut.edges) {
       const sourceId =
         keyToId.get(edge.sourceKey) ?? keyToId.get(slugKey(edge.sourceKey));
@@ -944,11 +950,11 @@ Attach every digression to a spine node. Do not start a second disconnected argu
       emittedEdgeIds.add(hydrated.id);
       yield { type: "edge", edge: hydrated };
     }
-    await wait(40);
+    await wait(30);
   }
 
-  // Run MCP Specialists (FRED, OpenAlex, Policy Docs) BEFORE deep node analysis & synthesis
-  // so every node analysis, critic review, and synthesizer brief sees live empirical FRED data!
+  // Step 4 & 5: Live Data Pull, Econometric Estimation, and Automatic Robustness Suite
+  yield workingStatus("Step 4/7 · Fetching live series & running econometric estimation…");
   const mcpResult = yield* streamMcpSpecialists({
     userId: input.userId,
     runId: input.runId,
@@ -956,6 +962,8 @@ Attach every digression to a spine node. Do not start a second disconnected argu
     scope: scopeOut.scope,
     queries,
     nodes: [...liveNodes.values()],
+    preferredMethod: scopeOut.preferredMethod,
+    hypothesizedDirection: scopeOut.hypothesizedDirection,
   });
   for (const node of mcpResult.nodes) {
     liveNodes.set(node.id, node);
@@ -968,10 +976,42 @@ Attach every digression to a spine node. Do not start a second disconnected argu
     citation: span.citation,
     seriesId: span.seriesId,
     units: span.units,
+    vintage: span.vintage,
+    sha256: span.resultHash.slice(0, 16),
+    earliestPoint: span.seriesPoints?.[0],
     latestPoint: span.seriesPoints?.[span.seriesPoints.length - 1],
+    sampleSize: span.seriesPoints?.length ?? 0,
   }));
 
-  yield workingStatus("Critic is auditing identification & span coverage…");
+  const estimateDigest = mcpResult.estimates.map((est) => ({
+    id: est.id,
+    method: est.methodLabel,
+    honestyLabel: est.honestyLabel,
+    seriesId: est.spec.outcomeSeriesId,
+    pointEstimate: est.pointEstimate,
+    standardError: est.standardError,
+    ciLower: est.ciLower,
+    ciUpper: est.ciUpper,
+    pValue: est.pValue,
+    sampleSize: est.sampleSize,
+    window: est.sampleWindow,
+    seMethod: est.seMethod,
+    preTrendPValue: est.diagnostics.preTrendPValue,
+    preRegistrationHash: est.spec.preRegistration.lockHash.slice(0, 12),
+  }));
+
+  const robustnessDigest = mcpResult.robustness.map((r) => ({
+    headlineEstimateId: r.headlineEstimateId,
+    passRatePct: Math.round(r.passRate * 100),
+    signFlipped: r.signFlipped,
+    significanceFlipped: r.significanceFlipped,
+    placeboPassed: r.placeboPassed,
+    summary: r.summary,
+    specs: r.specs,
+  }));
+
+  // Step 6: Skeptic / Red Team & Verification Wall
+  yield workingStatus("Step 6/7 · Skeptic Red-Team critique & verification wall…");
   const afterCritic = yield* applyCriticWalls([...liveNodes.values()]);
   for (const node of afterCritic) {
     liveNodes.set(node.id, node);
@@ -979,42 +1019,42 @@ Attach every digression to a spine node. Do not start a second disconnected argu
 
   const nodeList = [...liveNodes.values()];
   const supportedNodes = nodeList.filter((n) => n.status === "supported");
-  const contestedNodes = nodeList.filter((n) => n.status === "contested");
-
-  if (graphOut.nodes.length > 0) {
-    const placedRefs = graphOut.nodes
-      .map((n) => `[${slugKey(n.key)}] (${n.title})`)
-      .join(", ");
-    yield {
-      type: "narration",
-      item: {
-        id: crypto.randomUUID(),
-        kind: "narration",
-        agent: "literature",
-        text: `Mapped ${graphOut.nodes.length} core argument nodes across the 5-stage policy spine & digression band: ${placedRefs}. Grounded with ${mcpSpanDigest.length} empirical MCP span(s) and ${web.length} research lead(s).`,
-      },
-    };
-  }
+  const contradictedNodes = nodeList.filter((n) => n.status === "contradicted");
+  const inconclusiveNodes = nodeList.filter((n) => n.status === "inconclusive");
+  const unverifiableNodes = nodeList.filter((n) => n.status === "unverifiable");
 
   yield {
     type: "narration",
     item: {
       id: crypto.randomUUID(),
       kind: "narration",
-      agent: "critic",
-      text: `Verification audit complete: ${supportedNodes.length} node(s) graduated to Verified via empirical MCP spans (${supportedNodes.map((n) => `[${shortNodeKey(n.id)}]`).join(", ") || "none"})${
-        contestedNodes.length > 0
-          ? `; ${contestedNodes.length} node(s) remain flagged as Needs Proof (${contestedNodes.map((n) => `[${shortNodeKey(n.id)}]`).join(", ")}) due to identification confounders or unverified assumptions.`
-          : "."
-      }`,
+      agent: "skeptic",
+      text:
+        mcpResult.estimates.length > 0
+          ? `Skeptic Red-Team & Code Verification Audit: ${supportedNodes.length} claim(s) supported, ${contradictedNodes.length} contradicted, ${inconclusiveNodes.length} inconclusive. What would change my mind: (1) Fork the observation window to exclude post-2020 pandemic volatility; (2) Re-estimate in first-differences / log-changes; (3) Include a macro control series to test for omitted variable bias.`
+          : `Skeptic & Verification Audit: ${unverifiableNodes.length} claim(s) marked UNVERIFIABLE because live series observations were unavailable (${mcpResult.dataErrors[0] ?? "no provider key configured"}). Zero fallback numbers were substituted.`,
     },
   };
 
   yield workingStatus(
-    "Compiling quantitative node analyses & executive policy report in parallel…",
+    "Step 7/7 · Synthesizer writing brief & Data Auditor verifying every number…",
   );
 
-  let draft = fallbackDraft(scopeOut.runTitle, input.question, nodeList);
+  // Build the deterministic allowed numeric registry for the Data Auditor
+  const numericRegistry = buildAllowedNumericRegistry({
+    bundles: mcpResult.bundles,
+    estimates: mcpResult.estimates,
+    robustness: mcpResult.robustness,
+    literature: mcpResult.literatureEstimates,
+  });
+
+  let draft = fallbackDraft(
+    scopeOut.runTitle,
+    input.question,
+    nodeList,
+    mcpResult.estimates,
+    mcpResult.dataErrors,
+  );
 
   const analysesTask =
     graphOut.nodes.length > 0
@@ -1024,6 +1064,10 @@ Attach every digression to a spine node. Do not start a second disconnected argu
             question: input.question,
             scope: scopeOut.scope,
             mcpSpans: mcpSpanDigest,
+            estimates: estimateDigest,
+            robustness: robustnessDigest,
+            literatureEstimates: mcpResult.literatureEstimates,
+            dataErrors: mcpResult.dataErrors,
             nodes: graphOut.nodes.map((node) => ({
               key: node.key,
               kind: node.kind,
@@ -1038,14 +1082,19 @@ Attach every digression to a spine node. Do not start a second disconnected argu
   const synthTask = allowRoleAction("synthesizer", { type: "write_draft" })
     ? askJson(
         model,
-        `You are PoliNote's Chief Economist & Synthesizer. Return JSON { "brief", "appendix" }.
+        `You are PoliNote's Synthesizer. Return JSON { "brief", "appendix" }.
 Every factual sentence MUST cite an existing node short key in square brackets, like [claim_core] or [ev_fred].
-Cite only keys from the provided nodes list. Reference empirical FRED series numbers, elasticities, and statutory constraints.
-Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism Findings, ## Distributional Incidence) and appendix with (## Identification & Methodology, ## Counterfactuals & Sign-Flip Risks).`,
+CRITICAL NUMERIC RULE: Every single number you write MUST come verbatim from the provided "estimates", "robustness", "mcpSpans", or "literatureEstimates" objects. If "estimates" is empty, DO NOT write any numbers—state clearly that live data was unavailable.
+State the honesty label (e.g. Quasi-experimental (Event Study), Associational, Descriptive) and confidence band explicitly.
+Format brief with (## Executive Summary, ## Econometric Findings & Honesty Labels, ## Distributional Incidence) and appendix with (## Identification & Pre-Registration, ## Robustness Curve & What Would Change My Mind).`,
         JSON.stringify({
           title: scopeOut.runTitle,
           question: input.question,
           mcpSpans: mcpSpanDigest,
+          estimates: estimateDigest,
+          robustness: robustnessDigest,
+          literatureEstimates: mcpResult.literatureEstimates,
+          dataErrors: mcpResult.dataErrors,
           nodes: nodeList.map((node) => ({
             key: shortNodeKey(node.id),
             id: node.id,
@@ -1053,12 +1102,15 @@ Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism
             title: node.title,
             body: node.body,
             status: node.status,
+            honestyLabel: node.honestyLabel,
           })),
         }),
       ).catch((error) => {
         console.error(
           "[polinote/crew] synthesizer json failed, using node-ID fallback",
-          error instanceof Error ? redactSecrets(error.message) : "synthesizer error",
+          error instanceof Error
+            ? redactSecrets(error.message)
+            : "synthesizer error",
         );
         return null;
       })
@@ -1069,17 +1121,51 @@ Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism
   for (const raw of graphOut.nodes) {
     const hit = written.get(raw.key) ?? written.get(slugKey(raw.key));
     if (!hit) continue;
+    const auditedNodeBody = auditGeneratedProseNumbers(hit.body, numericRegistry, {
+      stripUntraced: true,
+    });
     raw.analysisTitle = hit.title;
-    raw.analysis = hit.body;
+    raw.analysis = auditedNodeBody.sanitizedText;
     yield { type: "analysis", analysis: hydrateAnalysis(input.runId, raw, web) };
   }
 
+  let auditSummaryText = "Data Auditor: 0 untraced numbers.";
   if (rawSynth) {
     const parsed = asRecord(rawSynth);
-    const brief = normalizeNodeCitations(asString(parsed.brief, ""), nodeList);
-    const appendix = normalizeNodeCitations(asString(parsed.appendix, ""), nodeList);
-    if (brief && draftCitesNodes(`${brief}\n${appendix}`, nodeList)) {
-      draft = { brief, appendix, updatedAt: nowIso() };
+    const rawBrief = normalizeNodeCitations(asString(parsed.brief, ""), nodeList);
+    const rawAppendix = normalizeNodeCitations(
+      asString(parsed.appendix, ""),
+      nodeList,
+    );
+    const briefAudit = auditGeneratedProseNumbers(rawBrief, numericRegistry, {
+      stripUntraced: true,
+    });
+    const appendixAudit = auditGeneratedProseNumbers(
+      rawAppendix,
+      numericRegistry,
+      { stripUntraced: true },
+    );
+
+    const totalChecked =
+      briefAudit.totalNumbersChecked + appendixAudit.totalNumbersChecked;
+    const totalMatched = briefAudit.matchedCount + appendixAudit.matchedCount;
+    const totalUntraced =
+      briefAudit.untracedNumbers.length + appendixAudit.untracedNumbers.length;
+
+    auditSummaryText = `Deterministic Data Auditor checked ${totalChecked} numeric token(s): ${totalMatched} traced to live series/estimates, ${totalUntraced} untraced (${totalUntraced > 0 ? "stripped before publish" : "0 mismatches"}).`;
+
+    if (
+      briefAudit.sanitizedText &&
+      draftCitesNodes(
+        `${briefAudit.sanitizedText}\n${appendixAudit.sanitizedText}`,
+        nodeList,
+      )
+    ) {
+      draft = {
+        brief: briefAudit.sanitizedText,
+        appendix: `${appendixAudit.sanitizedText}\n\n---\n*${auditSummaryText}*`,
+        updatedAt: nowIso(),
+      };
     }
   }
 
@@ -1088,8 +1174,18 @@ Format brief with clean sections (## Executive Summary, ## Empirical & Mechanism
     item: {
       id: crypto.randomUUID(),
       kind: "narration",
+      agent: "data_auditor",
+      text: auditSummaryText,
+    },
+  };
+
+  yield {
+    type: "narration",
+    item: {
+      id: crypto.randomUUID(),
+      kind: "narration",
       agent: "synthesizer",
-      text: `${draft.brief.split("\n\n").slice(0, 2).join("\n\n")}\n\nFull report, counterfactual time-series charts, and Word/PDF exports are ready on the Report & Export desk (${supportedNodes.length} verified node${supportedNodes.length === 1 ? "" : "s"}, ${mcpSpanDigest.length} empirical MCP span${mcpSpanDigest.length === 1 ? "" : "s"}).`,
+      text: `${draft.brief.split("\n\n").slice(0, 2).join("\n\n")}\n\nFull econometric tables, specification curve, and reproducible Jupyter/Quarto notebooks are ready on the Report & Export desk.`,
     },
   };
   yield { type: "draft", brief: draft.brief, appendix: draft.appendix };

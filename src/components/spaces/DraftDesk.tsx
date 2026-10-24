@@ -8,21 +8,28 @@ import { AnalysisModal } from "@/components/studio/AnalysisModal";
 import {
   CounterfactualTrajectoryChart,
   DistributionalIncidenceBarChart,
+  EconometricResultsPanel,
   EconomicScorecardBanner,
   FredSeriesChartCard,
   ImpulseResponseChart,
   IncidenceTradeoffMatrix,
+  RunTimelineStrip,
   SpineCoverageChart,
   VerifiedBibliographyTable,
   collectBibliography,
   extractFredSeries,
 } from "@/components/studio/ReportCharts";
 import { buildRunEconomicModel } from "@/lib/economics/engine";
+import { USER_HEADER } from "@/lib/local-workspace";
 import {
   buildClientFallbackReport,
   downloadPdfReport,
   downloadWordReport,
 } from "@/lib/reports/export-artifacts";
+import {
+  downloadCsvBundle,
+  downloadJupyterNotebook,
+} from "@/lib/reports/reproducibility";
 import type { CompiledPolicyReport } from "@/lib/reports/report-types";
 import {
   NODE_KIND_TAXONOMY,
@@ -43,7 +50,7 @@ function buildBrief(question: string, nodeLines: string[]): string {
 }
 
 export function DraftDesk() {
-  const { snapshot, activeId, activeProject, setNodeStatus } = useWorkspace();
+  const { userId, snapshot, activeId, activeProject, setNodeStatus } = useWorkspace();
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
   const [compiled, setCompiled] = useState<CompiledPolicyReport | null>(null);
   const [compiling, setCompiling] = useState(false);
@@ -137,7 +144,10 @@ export function DraftDesk() {
     try {
       const response = await fetch("/api/reports/compile", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(userId ? { [USER_HEADER]: userId } : {}),
+        },
         body: JSON.stringify({ runId: snapshot.run.id }),
       });
       if (response.ok) {
@@ -154,7 +164,10 @@ export function DraftDesk() {
     try {
       const response = await fetch("/api/reports/compile", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(userId ? { [USER_HEADER]: userId } : {}),
+        },
         body: JSON.stringify({ runId: snapshot.run.id }),
       });
       if (response.ok) {
@@ -280,6 +293,36 @@ export function DraftDesk() {
             </button>
             <button
               type="button"
+              className="node-action text-[var(--copper)]"
+              onClick={() =>
+                downloadCsvBundle({
+                  title: snapshot.run.title,
+                  seriesList: fredSeries,
+                  econModel,
+                })
+              }
+            >
+              Download CSV Data
+            </button>
+            <button
+              type="button"
+              className="node-action text-[var(--copper)]"
+              onClick={() =>
+                downloadJupyterNotebook({
+                  runId: snapshot.run.id,
+                  title: snapshot.run.title,
+                  scope: snapshot.scope,
+                  seriesList: fredSeries,
+                  econModel,
+                  nodes: snapshot.nodes,
+                  bibliography: bib,
+                })
+              }
+            >
+              Jupyter Notebook (.ipynb)
+            </button>
+            <button
+              type="button"
               className="node-action"
               onClick={() => void handleCopyMarkdown()}
             >
@@ -288,25 +331,43 @@ export function DraftDesk() {
           </div>
         </header>
 
-        <div className="space-y-6 p-5">
+        <div className="space-y-6 p-4 sm:p-5">
+          {/* 7-Stage Pipeline Timeline */}
+          <RunTimelineStrip
+            events={snapshot.events}
+            nodes={snapshot.nodes}
+            hasEstimates={Boolean(econModel.headlineEstimate)}
+          />
+
           {/* Quantitative Economic Scorecard */}
           {snapshot.nodes.length > 0 ? (
             <EconomicScorecardBanner scorecard={econModel.scorecard} />
           ) : null}
+
+          {/* Econometric Coefficient Table, Diagnostics & Interactive Specification Forks */}
+          <EconometricResultsPanel
+            econModel={econModel}
+            fredSeries={fredSeries}
+          />
 
           {/* 1. Figures, Time-Series Projections & Empirical Charts */}
           {snapshot.nodes.length > 0 ? (
             <section>
               <div className="mb-2.5 flex items-center justify-between">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-                  1. Time-Series Projections, Dynamic Impulse Responses & FRED Charts (Embedded in Word & PDF)
+                  1. Counterfactual Projections, Jordà Local Projections & Live Series Charts
                 </p>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
-                <CounterfactualTrajectoryChart series={econModel.counterfactual} />
-                <ImpulseResponseChart series={econModel.impulseResponse} />
+                {econModel.counterfactual ? (
+                  <CounterfactualTrajectoryChart series={econModel.counterfactual} />
+                ) : null}
+                {econModel.impulseResponse ? (
+                  <ImpulseResponseChart series={econModel.impulseResponse} />
+                ) : null}
                 <DistributionalIncidenceBarChart
                   items={econModel.incidenceDistribution}
+                  robustness={econModel.robustness}
                 />
                 <SpineCoverageChart nodes={snapshot.nodes} />
                 {fredSeries.map((series) => (

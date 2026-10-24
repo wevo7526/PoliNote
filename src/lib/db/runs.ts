@@ -46,13 +46,19 @@ export async function listRuns(userId: string): Promise<RunSummary[]> {
 
 export async function createRun(
   userId: string,
-  options?: { projectId?: string; title?: string },
+  options?: { id?: string; projectId?: string; title?: string },
 ): Promise<RunSummary> {
   const defaultProject = await ensureDefaultProject(userId);
   const projectId = options?.projectId?.trim() || defaultProject.id;
   const ts = nowIso();
+  const candidateId = options?.id?.trim() ?? "";
   const run: RunSummary = {
-    id: crypto.randomUUID(),
+    id:
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        candidateId,
+      )
+        ? candidateId
+        : crypto.randomUUID(),
     projectId,
     title: options?.title?.trim() || "Untitled run",
     status: "draft",
@@ -61,7 +67,7 @@ export async function createRun(
   };
   await mutateUserDb(userId, async (connection) => {
     await connection.run(
-      `INSERT INTO runs (id, project_id, title, status, created_at, updated_at)
+      `INSERT OR IGNORE INTO runs (id, project_id, title, status, created_at, updated_at)
        VALUES ($id, $project_id, $title, $status, $created_at, $updated_at)`,
       {
         id: run.id,

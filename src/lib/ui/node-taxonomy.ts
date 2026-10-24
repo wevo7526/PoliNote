@@ -37,80 +37,80 @@ export const NODE_KIND_TAXONOMY: Record<DigressionNodeKind, NodeKindInfo> = {
   },
   mechanism: {
     kind: "mechanism",
-    label: "Economic Mechanism (How It Works)",
+    label: "Economic Mechanism & Identification",
     shortLabel: "Mechanism",
     stage: "02 · Mechanism",
     color: "#8fbfb0",
     meaning:
-      "The real-world causal channel (such as price pass-through, supply-chain substitution, or capital investment) set in motion by the policy.",
+      "The causal transmission channel (price pass-through, factor substitution, capital formation) and identification design.",
     whatItDoes:
-      "Connects the policy rule to the expected outcome and shows the step-by-step transmission path.",
+      "Connects the policy rule to the testable outcome and states the identifying assumptions.",
   },
   claim: {
     kind: "claim",
-    label: "Core Policy Finding (Expected Effect)",
-    shortLabel: "Core Finding",
+    label: "Testable Econometric Claim",
+    shortLabel: "Core Claim",
     stage: "03 · Core Finding",
     color: "#d4b483",
     meaning:
-      "A testable prediction about how the policy changes prices, jobs, output, or fiscal revenue relative to the baseline.",
+      "A falsifiable prediction about how the policy shifts the target series relative to the counterfactual.",
     whatItDoes:
-      "Forms the central thesis of the policy brief. Must be backed by empirical data or literature to graduate to Verified.",
+      "Evaluated strictly by code rules on the econometric estimate (sign, 95% CI, pre-trend test, and robustness pass rate).",
   },
   evidence: {
     kind: "evidence",
-    label: "Empirical Data & Research Proof",
-    shortLabel: "Empirical Data",
-    stage: "04 · Evidence & Proof",
+    label: "Live Series, Estimate & Literature Proof",
+    shortLabel: "Empirical Proof",
+    stage: "04 · Evidence & Estimates",
     color: "#9bb4d4",
     meaning:
-      "Verifiable data pulled from FRED economic series, peer-reviewed OpenAlex studies, or official government records.",
+      "Live data pulled from FRED/ALFRED, BEA, BLS, Census, or World Bank, computed econometric estimates, and quote-backed OpenAlex studies.",
     whatItDoes:
-      "Provides the hashed proof span that upgrades a Working Hypothesis into a Verified finding and feeds the report's charts.",
+      "Carries full provenance, SHA-256 raw snapshot hash, vintage stamp, and standard errors.",
   },
   incidence: {
     kind: "incidence",
-    label: "Who Pays & Who Gains (Distributional Impact)",
+    label: "Distributional & Sectoral Incidence",
     shortLabel: "Who Pays / Gains",
     stage: "05 · Distributional Impact",
     color: "#d4a08c",
     meaning:
-      "The breakdown of winners and losers across households, workers, firms, and regions — distinct from who writes the statutory check.",
+      "The breakdown of statutory vs. economic incidence across households, workers, firms, and public budgets.",
     whatItDoes:
-      "Reveals the real economic burden and distributional tradeoff at the end of the policy chain.",
+      "Reveals how elasticities and market structure split the real burden of the policy.",
   },
   counterfactual: {
     kind: "counterfactual",
-    label: "Baseline / What-If Scenario",
-    shortLabel: "What-If Baseline",
+    label: "Counterfactual & Pre-Policy Forecast",
+    shortLabel: "Counterfactual",
     stage: "Digression Branch",
     color: "#b5a4d4",
     meaning:
-      "What would happen if no new policy were enacted, or if an alternative policy instrument were chosen instead.",
+      "The estimated trajectory absent the policy intervention (AR/ARIMA projection, Synthetic Control donor hull, or untreated comparison group).",
     whatItDoes:
-      "Prevents false attribution by comparing the policy against a realistic status-quo or alternative benchmark.",
+      "Benchmarks post-policy actuals against an explicit statistical counterfactual with confidence intervals.",
   },
   fork: {
     kind: "fork",
-    label: "Policy Design Branch (Alternative Path)",
-    shortLabel: "Design Fork",
+    label: "Pre-Registration Fork (Alternative Spec)",
+    shortLabel: "Spec Fork",
     stage: "Digression Branch",
     color: "#d48ca0",
     meaning:
-      "A critical design choice or structural threshold (such as retaliation, exemptions, or capacity bottlenecks) where the outcome splits.",
+      "A branch that modifies the scope, outcome series, estimator, observation window, or transform and re-runs live estimation.",
     whatItDoes:
-      "Maps how changing a key parameter or assumption flips the direction or magnitude of the policy effect.",
+      "Allows side-by-side comparison of how changing an assumption or sample window alters the estimate.",
   },
   uncertainty: {
     kind: "uncertainty",
-    label: "Key Risk & Evidence Gap",
-    shortLabel: "Key Risk / Gap",
+    label: "Skeptic Red-Team Critique & Threats",
+    shortLabel: "Skeptic Critique",
     stage: "Digression Branch",
     color: "#a8a29a",
     meaning:
-      "An unmeasured confounder, data limitation, or identification risk that could weaken or reverse the conclusion.",
+      "Named confounders, reverse-causality risks, pre-trend violations, or specification fragility raised by the Skeptic.",
     whatItDoes:
-      "Keeps the analysis honest by flagging where data is missing or where the Critic found an identification flaw.",
+      "Lists concrete 'What would change my mind' falsification tests that can be launched as live forks.",
   },
 };
 
@@ -126,47 +126,92 @@ export type StatusInfo = {
 export const NODE_STATUS_TAXONOMY: Record<DigressionNodeStatus, StatusInfo> = {
   supported: {
     status: "supported",
-    label: "Verified by Empirical Data",
-    shortLabel: "Verified",
+    label: "Supported by Econometric Estimate",
+    shortLabel: "Supported",
     color: "#8fbf9a",
     bgColor: "rgba(143,191,154,0.18)",
     meaning:
-      "Corroborated by at least one hashed MCP evidence span (FRED economic series, OpenAlex study, or official statutory text).",
+      "Set by code rule: estimate sign matches hypothesis, 95% CI excludes zero, pre-trend test passes, and >=60% of robustness specifications hold.",
+  },
+  contradicted: {
+    status: "contradicted",
+    label: "Contradicted by Econometric Estimate",
+    shortLabel: "Contradicted",
+    color: "#d46a6a",
+    bgColor: "rgba(212,106,106,0.18)",
+    meaning:
+      "Set by code rule: estimated effect has the opposite sign of the hypothesis and its 95% CI excludes zero.",
+  },
+  inconclusive: {
+    status: "inconclusive",
+    label: "Inconclusive (CI Includes Zero / Fragile)",
+    shortLabel: "Inconclusive",
+    color: "#d4b483",
+    bgColor: "rgba(212,180,131,0.16)",
+    meaning:
+      "Tested with live data, but the 95% confidence interval includes zero, pre-trends fail, or the sign flips across robustness specs.",
+  },
+  tested: {
+    status: "tested",
+    label: "Tested (Econometric Estimate Computed)",
+    shortLabel: "Tested",
+    color: "#9bb4d4",
+    bgColor: "rgba(155,180,212,0.18)",
+    meaning:
+      "Live series attached and econometric specification executed with standard errors and diagnostics.",
+  },
+  data_attached: {
+    status: "data_attached",
+    label: "Live Data Attached (Awaiting Test)",
+    shortLabel: "Data Attached",
+    color: "#8fbfb0",
+    bgColor: "rgba(143,191,176,0.16)",
+    meaning:
+      "Backed by a live provider series or literature span with SHA-256 provenance, awaiting econometric estimation.",
+  },
+  unverifiable: {
+    status: "unverifiable",
+    label: "Unverifiable (Live Data Unavailable)",
+    shortLabel: "Unverifiable",
+    color: "#d46a6a",
+    bgColor: "rgba(212,106,106,0.15)",
+    meaning:
+      "Required source API key is missing or upstream provider returned no observations. Never substituted with fallback data.",
   },
   contested: {
     status: "contested",
-    label: "Contested / Needs Stronger Proof",
-    shortLabel: "Needs Proof",
+    label: "Contested / Skeptic Objection",
+    shortLabel: "Contested",
     color: "#d4a08c",
     bgColor: "rgba(212,160,140,0.18)",
     meaning:
-      "Flagged by the Critic or invalidated by a Scope edit because it lacks direct empirical verification or faces confounders.",
+      "Flagged by the Skeptic or invalidated by a Scope edit due to identification confounders or missing estimation proof.",
   },
   proposed: {
     status: "proposed",
-    label: "Working Hypothesis",
-    shortLabel: "Hypothesis",
+    label: "Proposed Hypothesis",
+    shortLabel: "Proposed",
     color: "#d4b483",
     bgColor: "rgba(212,180,131,0.14)",
     meaning:
-      "Placed on the map by the crew based on initial policy logic; awaiting empirical confirmation.",
+      "Initial hypothesis placed on the argument map; no live data or estimate attached yet.",
   },
   rejected: {
     status: "rejected",
-    label: "Refuted by Evidence",
-    shortLabel: "Refuted",
+    label: "Rejected",
+    shortLabel: "Rejected",
     color: "#d46a6a",
     bgColor: "rgba(212,106,106,0.18)",
-    meaning: "Contradicted by empirical series or statutory bounds.",
+    meaning: "Refuted by empirical estimation or statutory bounds.",
   },
   pruned: {
     status: "pruned",
-    label: "Excluded by Researcher",
-    shortLabel: "Excluded",
+    label: "Pruned by Researcher",
+    shortLabel: "Pruned",
     color: "#9a9284",
     bgColor: "rgba(154,146,132,0.14)",
     meaning:
-      "Set aside from the active policy report while remaining preserved in the audit trail.",
+      "Excluded from the active synthesis while preserved in the run event log.",
   },
 };
 
@@ -177,32 +222,32 @@ export const EDGE_KIND_TAXONOMY: Record<
   supports: {
     label: "Supports",
     verb: "provides evidence for",
-    meaning: "Empirical data or mechanism that strengthens the target finding.",
+    meaning: "Empirical data, estimate, or mechanism that corroborates the target node.",
   },
   causal: {
     label: "Drives →",
-    verb: "directly causes or drives",
-    meaning: "Direct cause-and-effect link along the policy spine.",
+    verb: "transmits into",
+    meaning: "Direct economic transmission link along the policy spine.",
   },
   depends_on: {
     label: "Depends On",
-    verb: "is legally or structurally bound by",
-    meaning: "Requires this statutory rule, authority, or prerequisite to operate.",
+    verb: "is bound by",
+    meaning: "Requires this statutory rule, pre-registration lock, or identifying assumption.",
   },
   elaborates: {
     label: "Details",
     verb: "adds empirical context to",
-    meaning: "Expands the mechanism or macro benchmark behind the node.",
+    meaning: "Expands the mechanism or robustness specification behind the node.",
   },
   attacks: {
     label: "Challenges",
     verb: "challenges or limits",
-    meaning: "Identifies a risk, confounder, or counter-force that weakens the claim.",
+    meaning: "Identifies a confounder, pre-trend violation, or sign-flip risk.",
   },
   alternatives: {
-    label: "What-If Branch",
-    verb: "offers a counterfactual alternative to",
-    meaning: "Presents an alternative policy design or baseline scenario.",
+    label: "Fork / Counterfactual",
+    verb: "branches as an alternative to",
+    meaning: "Presents a counterfactual baseline or alternative specification fork.",
   },
 };
 
@@ -226,7 +271,7 @@ export function buildNodeProvenanceTrace(
   downstream: Array<{ node: DigressionNode; edgeKind: DigressionEdgeKind }>;
 } {
   const kindInfo = NODE_KIND_TAXONOMY[node.kind];
-  const statusInfo = NODE_STATUS_TAXONOMY[node.status];
+  const statusInfo = NODE_STATUS_TAXONOMY[node.status] ?? NODE_STATUS_TAXONOMY.proposed;
   const byId = new Map(allNodes.map((n) => [n.id, n]));
 
   const upstream: Array<{ node: DigressionNode; edgeKind: DigressionEdgeKind }> = [];
@@ -244,76 +289,61 @@ export function buildNodeProvenanceTrace(
 
   const steps: NodeTraceStep[] = [];
 
-  // Step 1: Origin
   steps.push({
-    step: "1. Created by Agent",
+    step: "1. Placed by Crew Role",
     actor: humanAgent(node.agent),
-    detail: `Placed in "${kindInfo.stage}" as a ${kindInfo.label.toLowerCase()}.`,
+    detail: `Placed in "${kindInfo.stage}" as ${kindInfo.label}${node.honestyLabel ? ` · Honesty label: ${node.honestyLabel}` : ""}.`,
     tone: "neutral",
   });
 
-  // Step 2: Empirical MCP Spans or Web Leads
   const mcpChips = node.provenance.filter((c) => c.spanId);
-  const webChips = node.provenance.filter((c) => !c.spanId);
-
   if (mcpChips.length > 0) {
     steps.push({
-      step: "2. Empirical Data Attached (MCP)",
+      step: "2. Live Data Attached (SHA-256 Provenance)",
       actor: mcpChips.map((c) => c.source).join(", "),
-      detail: mcpChips.map((c) => `${c.label} (${c.spanId})`).join(" · "),
+      detail: mcpChips
+        .map(
+          (c) =>
+            `${c.label} (span=${c.spanId}${c.vintage ? `, vintage=${c.vintage}` : ""})`,
+        )
+        .join(" · "),
       tone: "positive",
-    });
-  } else if (webChips.length > 0) {
-    steps.push({
-      step: "2. Initial Research Leads",
-      actor: "Web & Literature Intake",
-      detail: `Grounded with ${webChips.length} lead(s): ${webChips
-        .map((c) => c.label)
-        .slice(0, 2)
-        .join("; ")}.`,
-      tone: "neutral",
     });
   } else {
     steps.push({
-      step: "2. Evidence Check",
-      actor: "MCP Specialists",
-      detail: "No direct FRED series or statutory span attached to this node yet.",
+      step: "2. Live Data Check",
+      actor: "Data Scout",
+      detail: "No direct live series span attached to this node.",
       tone: "warning",
     });
   }
 
-  // Step 3: Critic / Status Audit
   const criticFlags = events.filter(
     (ev) =>
       (ev.type === "critic.flag" || ev.type === "node.status_changed") &&
       ev.payload?.nodeId === node.id,
   );
-  if (node.status === "supported") {
-    steps.push({
-      step: "3. Verification Audit",
-      actor: "Critic & Verification Wall",
-      detail: `Graduated to Verified (${mcpChips.length} hashed MCP span${mcpChips.length === 1 ? "" : "s"} attached).`,
-      tone: "positive",
-    });
-  } else if (node.status === "contested") {
-    const flagMsg =
-      typeof criticFlags[criticFlags.length - 1]?.payload?.message === "string"
+
+  steps.push({
+    step: "3. Econometric & Skeptic Audit",
+    actor:
+      node.status === "supported" ||
+      node.status === "contradicted" ||
+      node.status === "inconclusive"
+        ? "Econometric Code Rule"
+        : "Skeptic & Auditor",
+    detail:
+      node.statusReason ||
+      (typeof criticFlags[criticFlags.length - 1]?.payload?.message === "string"
         ? String(criticFlags[criticFlags.length - 1]?.payload?.message)
-        : statusInfo.meaning;
-    steps.push({
-      step: "3. Critic Audit",
-      actor: "Critic",
-      detail: flagMsg,
-      tone: "warning",
-    });
-  } else {
-    steps.push({
-      step: "3. Current Standing",
-      actor: "Workbench",
-      detail: statusInfo.meaning,
-      tone: "neutral",
-    });
-  }
+        : statusInfo.meaning),
+    tone:
+      node.status === "supported" || node.status === "tested" || node.status === "data_attached"
+        ? "positive"
+        : node.status === "unverifiable" || node.status === "contradicted" || node.status === "contested"
+          ? "warning"
+          : "neutral",
+  });
 
   return {
     kindInfo,

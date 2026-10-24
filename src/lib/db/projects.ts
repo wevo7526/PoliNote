@@ -118,13 +118,24 @@ export async function getProject(
   });
 }
 
+const PROJECT_ID_RE = /^proj_[a-zA-Z0-9_-]{4,48}$/;
+
 export async function createProject(
   userId: string,
-  input?: { title?: string; description?: string; contextMemo?: string },
+  input?: {
+    id?: string;
+    title?: string;
+    description?: string;
+    contextMemo?: string;
+  },
 ): Promise<ProjectSummary> {
+  await ensureDefaultProject(userId);
   const ts = nowIso();
+  const candidateId = input?.id?.trim() ?? "";
   const project: ProjectSummary = {
-    id: `proj_${crypto.randomUUID().slice(0, 12)}`,
+    id: PROJECT_ID_RE.test(candidateId)
+      ? candidateId
+      : `proj_${crypto.randomUUID().slice(0, 12)}`,
     title: input?.title?.trim() || "Untitled project",
     description:
       input?.description?.trim() ||
@@ -136,7 +147,7 @@ export async function createProject(
 
   await mutateUserDb(userId, async (connection) => {
     await connection.run(
-      `INSERT INTO projects (id, title, description, context_memo, created_at, updated_at)
+      `INSERT OR REPLACE INTO projects (id, title, description, context_memo, created_at, updated_at)
        VALUES ($id, $title, $description, $context_memo, $created_at, $updated_at)`,
       {
         id: project.id,
@@ -158,8 +169,15 @@ export async function updateProject(
   input: { title?: string; description?: string; contextMemo?: string },
 ): Promise<ProjectSummary | null> {
   const current = await getProject(userId, projectId);
-  if (!current) return null;
   const ts = nowIso();
+  if (!current) {
+    return createProject(userId, {
+      id: projectId,
+      title: input.title,
+      description: input.description,
+      contextMemo: input.contextMemo,
+    });
+  }
   const next: ProjectSummary = {
     ...current,
     title: typeof input.title === "string" && input.title.trim() ? input.title.trim() : current.title,

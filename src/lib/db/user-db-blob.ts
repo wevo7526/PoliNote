@@ -1,5 +1,6 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { BlobNotFoundError, get, put } from "@vercel/blob";
+import { redactSecrets } from "@/lib/mcp/http";
 import { isUserId } from "@/lib/session";
 
 const ACCESS = "private" as const;
@@ -11,8 +12,15 @@ export function userDbBlobKey(userId: string): string {
   return `users/${userId}.duckdb`;
 }
 
+export function userJsonBlobKey(userId: string): string {
+  if (!isUserId(userId)) {
+    throw new Error("Invalid user id");
+  }
+  return `users/${userId}.json`;
+}
+
 export function blobPersistenceEnabled(): boolean {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.VERCEL);
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim());
 }
 
 export async function hydrateUserDbFile(
@@ -33,7 +41,11 @@ export async function hydrateUserDbFile(
     return true;
   } catch (error) {
     if (error instanceof BlobNotFoundError) return false;
-    throw error;
+    console.warn(
+      "[polinote/blob] hydrate duckdb skipped:",
+      error instanceof Error ? redactSecrets(error.message) : "blob error",
+    );
+    return false;
   }
 }
 
@@ -42,11 +54,56 @@ export async function persistUserDbFile(
   filePath: string,
 ): Promise<void> {
   if (!blobPersistenceEnabled()) return;
-  const bytes = await readFile(filePath);
-  await put(userDbBlobKey(userId), bytes, {
-    access: ACCESS,
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    contentType: "application/octet-stream",
-  });
+  try {
+    const bytes = await readFile(filePath);
+    await put(userDbBlobKey(userId), bytes, {
+      access: ACCESS,
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: "application/octet-stream",
+    });
+  } catch (error) {
+    console.warn(
+      "[polinote/blob] persist duckdb skipped:",
+      error instanceof Error ? redactSecrets(error.message) : "blob error",
+    );
+  }
+}
+
+export async function hydrateUserJsonBlob(
+  userId: string,
+): Promise<string | null> {
+  if (!blobPersistenceEnabled()) return null;
+  try {
+    const result = await get(userJsonBlobKey(userId), {
+      access: ACCESS,
+      useCache: false,
+    });
+    if (!result || result.statusCode !== 200 || !result.stream) return null;
+    const text = await new Response(result.stream).text();
+    return text.trim() ? text : null;
+  } catch (error) {
+    if (error instanceof BlobNotFoundError) return null;
+    return null;
+  }
+}
+
+export async function persistUserJsonBlob(
+  userId: string,
+  jsonText: string,
+): Promise<void> {
+  if (!blobPersistenceEnabled()) return;
+  try {
+    await put(userJsonBlobKey(userId), jsonText, {
+      access: ACCESS,
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: "application/json",
+    });
+  } catch (error) {
+    console.warn(
+      "[polinote/blob] persist json skipped:",
+      error instanceof Error ? redactSecrets(error.message) : "blob error",
+    );
+  }
 }

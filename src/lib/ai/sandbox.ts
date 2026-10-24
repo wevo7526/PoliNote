@@ -1,23 +1,16 @@
-import { gateway, streamText, type LanguageModel } from "ai";
+import { gateway, generateText, type LanguageModel } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { getObservations, resolveCanonicalSeries } from "@/lib/mcp/fred";
 import type { ExtractedSeries } from "@/components/studio/ReportCharts";
-
-function hasSandboxAiCredentials(): boolean {
-  return Boolean(
-    process.env.OPENAI_API_KEY?.trim() ||
-      process.env.AI_GATEWAY_API_KEY?.trim() ||
-      process.env.VERCEL_OIDC_TOKEN?.trim(),
-  );
-}
-
-function resolveSandboxAiModel(modelId: string): LanguageModel {
-  const cleanId = modelId.replace(/^openai\//, "");
-  if (process.env.OPENAI_API_KEY?.trim()) {
-    return openai(cleanId);
-  }
-  return gateway(`openai/${cleanId}`);
-}
+import { selectAndValidateLiveSeries } from "@/lib/data/selector";
+import type { FetchedSeriesBundle } from "@/lib/data/types";
+import {
+  auditGeneratedProseNumbers,
+  buildAllowedNumericRegistry,
+} from "@/lib/economics/auditor";
+import { executeEconometricEstimate } from "@/lib/economics/estimators";
+import type { EconometricEstimate } from "@/lib/economics/schemas";
+import { getObservations } from "@/lib/mcp/fred";
+import { searchLiterature, type ExtractedLiteratureEstimate } from "@/lib/mcp/openalex";
 
 export type SandboxPersona = {
   id: string;
@@ -27,6 +20,7 @@ export type SandboxPersona = {
   tagline: string;
   voicePrompt: string;
   sampleQuestion: string;
+  perspectiveBanner: string;
 };
 
 export const SANDBOX_PERSONAS: SandboxPersona[] = [
@@ -36,10 +30,11 @@ export const SANDBOX_PERSONAS: SandboxPersona[] = [
     era: "1776 · Glasgow & Edinburgh",
     school: "Classical Political Economy",
     tagline: "Division of labor, natural liberty, and skepticism of mercantile privilege.",
+    perspectiveBanner: "Simulated perspective · Classical Political Economy (1776)",
     voicePrompt:
-      "Speak in the unmistakable, lucid, observant voice of Adam Smith (author of The Wealth of Nations and The Theory of Moral Sentiments). Contrast productive labor, the extent of the market, and the 'obvious and simple system of natural liberty' against modern neo-mercantilist tariffs, monopolies, sovereign debt, and paper-money price pressures. Use concrete 18th-century analogies (pin factories, corn laws, East India charters, specie vs. paper bills) alongside the live FRED macro numbers provided.",
+      "Speak in the lucid, observant voice of Adam Smith (The Wealth of Nations). Contrast productive labor, the extent of the market, and natural liberty against mercantile tariffs and monopolies. Debate strictly over the actual econometric estimates and cited literature provided in the prompt; never introduce or invent any numbers of your own.",
     sampleQuestion:
-      "You are Adam Smith, tell us about the current macro regime as him",
+      "You are Adam Smith: debate the tariff pass-through and domestic employment estimates in this run.",
   },
   {
     id: "keynes",
@@ -47,21 +42,23 @@ export const SANDBOX_PERSONAS: SandboxPersona[] = [
     era: "1936 · Cambridge & Bloomsbury",
     school: "Macroeconomics of Effective Demand",
     tagline: "Animal spirits, liquidity preference, and public investment under uncertainty.",
+    perspectiveBanner: "Simulated perspective · Effective Demand & Liquidity Preference (1936)",
     voicePrompt:
-      "Speak in the incisive, witty, aristocratic voice of John Maynard Keynes (The General Theory, A Tract on Monetary Reform). Diagnose the current macro regime through effective demand, the marginal efficiency of capital, rentier interest rates, and animal spirits.",
+      "Speak in the incisive voice of John Maynard Keynes (The General Theory). Evaluate the run's actual estimates and cited literature through effective demand, the marginal efficiency of capital, and liquidity preference. Never introduce any unverified numbers.",
     sampleQuestion:
-      "You are John Maynard Keynes: diagnose today's interest rates, fiscal deficits, and AI investment boom.",
+      "You are John Maynard Keynes: evaluate business investment and interest-rate sensitivity in this run.",
   },
   {
     id: "friedman",
     name: "Milton Friedman",
     era: "1963 · Chicago Workshop",
     school: "Monetarism & Price Theory",
-    tagline: "Inflation is always and everywhere a monetary phenomenon; rules over discretion.",
+    tagline: "Price signals, long and variable monetary lags, and incidence of distortionary taxes.",
+    perspectiveBanner: "Simulated perspective · Price Theory & Monetarism (1963)",
     voicePrompt:
-      "Speak in the crisp, empirical, debate-ready voice of Milton Friedman. Emphasize price signals, monetary aggregates, long and variable central-bank lags, and the unintended incidence of tariffs and industrial subsidies.",
+      "Speak in the empirical, debate-ready voice of Milton Friedman. Emphasize price signals, long and variable lags, and the unintended incidence of tariffs and subsidies using only the actual estimates and literature spans in the prompt. Never invent numbers.",
     sampleQuestion:
-      "You are Milton Friedman: evaluate post-pandemic inflation, Fed rate cuts, and tariff pass-through.",
+      "You are Milton Friedman: critique the incidence and specification robustness of these estimates.",
   },
   {
     id: "hamilton",
@@ -69,32 +66,35 @@ export const SANDBOX_PERSONAS: SandboxPersona[] = [
     era: "1791 · Treasury Department",
     school: "American System & Public Credit",
     tagline: "Pecuniary bounties, strategic manufacturing, and deep sovereign credit markets.",
+    perspectiveBanner: "Simulated perspective · Report on Manufactures (1791)",
     voicePrompt:
-      "Speak in the energetic, state-building voice of Alexander Hamilton (1791 Report on Manufactures, First Report on the Public Credit). Defend targeted pecuniary bounties, domestic industrial capacity, and strategic supply chains while distinguishing disciplined public credit from unanchored protectionism.",
+      "Speak in the state-building voice of Alexander Hamilton (1791 Report on Manufactures). Weigh targeted bounties vs. protective duties strictly against the actual econometric estimates and cited literature provided.",
     sampleQuestion:
-      "You are Alexander Hamilton: make the case for semiconductor subsidies and strategic EV tariffs today.",
+      "You are Alexander Hamilton: compare investment tax credits against tariffs using the run's estimates.",
   },
   {
     id: "ostrom",
     name: "Elinor Ostrom",
     era: "1990 · Bloomington Workshop",
     school: "Polycentric Institutional Analysis",
-    tagline: "Neither state leviathan nor atomized market alone: polycentric rules that fit local ecology.",
+    tagline: "Polycentric governance and local institutional rules over one-size-fits-all mandates.",
+    perspectiveBanner: "Simulated perspective · Polycentric Institutions (1990)",
     voicePrompt:
-      "Speak in the grounded, institutionalist, field-research voice of Elinor Ostrom. Analyze policy through polycentric governance, boundary rules, monitoring, graduated sanctions, and how top-down mandates interact with local municipal or commons norms.",
+      "Speak in the grounded institutionalist voice of Elinor Ostrom. Analyze the run's actual estimates and cited studies through polycentric governance, boundary rules, and local monitoring.",
     sampleQuestion:
-      "You are Elinor Ostrom: how should cities and states govern transit-oriented housing and grid commons?",
+      "You are Elinor Ostrom: how do local institutional rules shape the outcomes estimated in this run?",
   },
   {
     id: "volcker",
     name: "Paul Volcker",
     era: "1979 · Eccles Building",
     school: "Central Bank Credibility",
-    tagline: "Breaking inflationary psychology requires discipline before comfort.",
+    tagline: "Anchoring inflation expectations requires discipline and institutional credibility.",
+    perspectiveBanner: "Simulated perspective · Monetary Credibility (1979)",
     voicePrompt:
-      "Speak in the plain-spoken, towering, no-nonsense voice of Paul Volcker. Focus on inflation expectations, real interest rates, central bank independence, and the danger of premature monetary easing when fiscal deficits remain wide.",
+      "Speak in the plain-spoken voice of Paul Volcker. Focus on inflation expectations, real interest rates, and fiscal discipline, referencing only the actual estimates and cited literature provided.",
     sampleQuestion:
-      "You are Paul Volcker: is inflation truly anchored in the current macro regime?",
+      "You are Paul Volcker: what do the estimated impulse responses imply for inflation credibility?",
   },
 ];
 
@@ -118,17 +118,19 @@ export function detectPersona(
   if (lower.includes("ostrom")) return SANDBOX_PERSONAS[4]!;
   if (lower.includes("volcker")) return SANDBOX_PERSONAS[5]!;
 
-  // Check if user wrote "You are <Name>"
-  const customMatch = prompt.match(/you are\s+([A-Z][a-zA-Z\s.-]{2,32}?)(?:[,.:]|tell|explain|what|how)/i);
+  const customMatch = prompt.match(
+    /you are\s+([A-Z][a-zA-Z\s.-]{2,32}?)(?:[,.:]|tell|explain|what|how)/i,
+  );
   if (customMatch?.[1]) {
     const customName = customMatch[1].trim();
     return {
       id: "custom",
       name: customName,
-      era: "Custom Persona Lens",
+      era: "Simulated Historical Perspective",
       school: "Political Economy Sandbox",
-      tagline: `Interactive macro & policy exploration in the voice of ${customName}.`,
-      voicePrompt: `Adopt the authentic intellectual voice, analytical framework, and historical sensibility of ${customName}. Ground every claim in the live FRED macro numbers provided.`,
+      tagline: `Simulated perspective of ${customName} debating actual run estimates and cited literature.`,
+      perspectiveBanner: `Simulated perspective · ${customName}`,
+      voicePrompt: `Adopt the intellectual framework of ${customName}. Debate strictly over the actual econometric estimates and cited literature provided; never introduce or invent numbers.`,
       sampleQuestion: prompt,
     };
   }
@@ -136,117 +138,127 @@ export function detectPersona(
   return SANDBOX_PERSONAS[0]!;
 }
 
-const FALLBACK_MACRO_SERIES: ExtractedSeries[] = [
-  {
-    key: "CPIAUCSL",
-    seriesId: "CPIAUCSL",
-    title: "Consumer Price Index for All Urban Consumers (CPI-U)",
-    units: "Index 1982-1984=100",
-    url: "https://fred.stlouisfed.org/series/CPIAUCSL",
-    nodeTitle: "Price Level & Inflation Regime",
-    points: [
-      { date: "2023-03-01", value: 301.8 },
-      { date: "2023-06-01", value: 303.8 },
-      { date: "2023-09-01", value: 307.5 },
-      { date: "2023-12-01", value: 308.7 },
-      { date: "2024-03-01", value: 312.2 },
-      { date: "2024-06-01", value: 313.0 },
-      { date: "2024-09-01", value: 314.7 },
-      { date: "2024-12-01", value: 317.6 },
-      { date: "2025-03-01", value: 319.8 },
-    ],
-  },
-  {
-    key: "FEDFUNDS",
-    seriesId: "FEDFUNDS",
-    title: "Federal Funds Effective Rate",
-    units: "Percent",
-    url: "https://fred.stlouisfed.org/series/FEDFUNDS",
-    nodeTitle: "Monetary Policy Stance",
-    points: [
-      { date: "2023-03-01", value: 4.65 },
-      { date: "2023-06-01", value: 5.08 },
-      { date: "2023-09-01", value: 5.33 },
-      { date: "2023-12-01", value: 5.33 },
-      { date: "2024-03-01", value: 5.33 },
-      { date: "2024-06-01", value: 5.33 },
-      { date: "2024-09-01", value: 5.13 },
-      { date: "2024-12-01", value: 4.48 },
-      { date: "2025-03-01", value: 4.33 },
-    ],
-  },
-  {
-    key: "UNRATE",
-    seriesId: "UNRATE",
-    title: "Civilian Unemployment Rate",
-    units: "Percent",
-    url: "https://fred.stlouisfed.org/series/UNRATE",
-    nodeTitle: "Labor Market Slack",
-    points: [
-      { date: "2023-03-01", value: 3.5 },
-      { date: "2023-06-01", value: 3.6 },
-      { date: "2023-09-01", value: 3.8 },
-      { date: "2023-12-01", value: 3.7 },
-      { date: "2024-03-01", value: 3.8 },
-      { date: "2024-06-01", value: 4.1 },
-      { date: "2024-09-01", value: 4.1 },
-      { date: "2024-12-01", value: 4.1 },
-      { date: "2025-03-01", value: 4.2 },
-    ],
-  },
-];
+function hasSandboxAiCredentials(): boolean {
+  return Boolean(
+    process.env.OPENAI_API_KEY?.trim() ||
+      process.env.AI_GATEWAY_API_KEY?.trim() ||
+      process.env.VERCEL_OIDC_TOKEN?.trim(),
+  );
+}
 
-export async function fetchSandboxMacroSeries(
-  prompt: string,
-): Promise<ExtractedSeries[]> {
-  const candidates = resolveCanonicalSeries(prompt);
-  // Always ensure core macro regime indicators are included when asking about macro regime
-  const coreIds = ["CPIAUCSL", "FEDFUNDS", "UNRATE", "GDPC1"];
-  const picked = [
-    ...candidates.slice(0, 2),
-    ...resolveCanonicalSeries(coreIds.join(" ")),
-  ]
-    .filter((item, idx, arr) => arr.findIndex((x) => x.id === item.id) === idx)
-    .slice(0, 3);
+function resolveSandboxAiModel(modelId: string): LanguageModel {
+  const cleanId = modelId.replace(/^openai\//, "");
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    return openai(cleanId);
+  }
+  return gateway(`openai/${cleanId}`);
+}
 
-  const fetched = await Promise.all(
-    picked.map(async (item): Promise<ExtractedSeries | null> => {
-      try {
-        const res = await getObservations({
-          seriesId: item.id,
-          title: item.title,
-          units: item.units,
-        });
-        if (res.ok && res.data && res.data.seriesPoints.length >= 2) {
-          return {
-            key: item.id,
-            seriesId: item.id,
-            title: item.title,
-            units: item.units,
-            url: res.data.span.url,
-            spanId: res.data.span.id,
-            nodeTitle: `${item.id} Macro Benchmark`,
-            points: res.data.seriesPoints,
-          };
-        }
-      } catch {
-        /* ignore and use fallback */
-      }
+/**
+ * Queries live provider series and OpenAlex literature specifically relevant to the prompt.
+ * ZERO fallback macro series, ZERO hardcoded numbers. If no live data is found or FRED_API_KEY
+ * is missing, returns empty `charts: []` and an explicit `dataStatusMessage`.
+ */
+export async function fetchSandboxLiveEvidence(prompt: string): Promise<{
+  charts: ExtractedSeries[];
+  bundles: FetchedSeriesBundle[];
+  estimates: EconometricEstimate[];
+  literature: ExtractedLiteratureEstimate[];
+  dataStatusMessage: string;
+}> {
+  const charts: ExtractedSeries[] = [];
+  const bundles: FetchedSeriesBundle[] = [];
+  const estimates: EconometricEstimate[] = [];
+  let literature: ExtractedLiteratureEstimate[] = [];
+  const errors: string[] = [];
+
+  const [selectionRes, litRes] = await Promise.all([
+    selectAndValidateLiveSeries({
+      question: prompt,
+      maxSelected: 2,
+    }).catch((err) => {
+      errors.push(err instanceof Error ? err.message : "Series search failed");
       return null;
     }),
-  );
+    searchLiterature({ query: prompt }).catch(() => null),
+  ]);
 
-  const valid = fetched.filter((x): x is ExtractedSeries => x !== null);
-  return valid.length > 0 ? valid : FALLBACK_MACRO_SERIES;
+  if (litRes?.ok && litRes.data?.works) {
+    literature = litRes.data.works;
+  }
+
+  if (selectionRes) {
+    for (const err of selectionRes.providerErrors) {
+      errors.push(err.message);
+    }
+    for (const cand of selectionRes.selected.slice(0, 2)) {
+      const obsRes = await getObservations({
+        seriesId: cand.metadata.id,
+        question: prompt,
+        observationStart: selectionRes.derivedWindow.observationStart,
+        observationEnd: selectionRes.derivedWindow.observationEnd,
+      });
+      if (obsRes.ok && obsRes.data && obsRes.data.seriesPoints.length >= 10) {
+        const d = obsRes.data;
+        charts.push({
+          key: d.seriesId,
+          seriesId: d.seriesId,
+          title: d.title,
+          units: d.units,
+          url: d.span.url,
+          spanId: d.span.id,
+          vintage: d.provenance.vintageDate,
+          resultHash: d.snapshot.sha256,
+          provenance: d.provenance,
+          nodeTitle: `${d.seriesId} Live Series`,
+          points: d.seriesPoints,
+        });
+        const bundle: FetchedSeriesBundle = {
+          metadata: cand.metadata,
+          observations: d.seriesPoints,
+          provenance: d.provenance,
+          snapshot: d.snapshot,
+        };
+        bundles.push(bundle);
+        try {
+          const est = executeEconometricEstimate({
+            method: "descriptive_newey_west",
+            outcome: bundle,
+            policyDate: selectionRes.derivedWindow.policyDate,
+            scopeId: "sandbox_scope",
+          });
+          estimates.push(est);
+        } catch {
+          /* skip estimate if preconditions fail */
+        }
+      } else if (!obsRes.ok && obsRes.error) {
+        errors.push(obsRes.error);
+      }
+    }
+  }
+
+  const dataStatusMessage =
+    charts.length > 0
+      ? `Grounded in ${charts.length} live series (${charts.map((c) => c.seriesId).join(", ")}), ${estimates.length} computed estimate(s), and ${literature.length} OpenAlex literature study(s).`
+      : errors[0] ??
+        "No live statistical series found for this prompt. Personas will debate strictly conceptually and over cited literature without introducing numbers.";
+
+  return {
+    charts,
+    bundles,
+    estimates,
+    literature,
+    dataStatusMessage,
+  };
 }
 
 export function buildFollowUps(persona: SandboxPersona): string[] {
   const others = SANDBOX_PERSONAS.filter((p) => p.id !== persona.id);
   const challenger = others[0]?.name ?? "John Maynard Keynes";
   return [
-    `As ${persona.name}, how would you critique a 25% tariff on imported electric vehicles and semiconductors?`,
-    `How would ${challenger} challenge ${persona.name}'s reading of these FRED numbers?`,
-    `As ${persona.name}, who truly bears the incidence of today's fiscal deficits and interest rates?`,
+    `How would ${challenger} challenge ${persona.name}'s interpretation of this run's estimates and pre-trend diagnostics?`,
+    `As ${persona.name}, which specification fork (window, transform, or control variable) would test the fragile assumptions here?`,
+    `As ${persona.name}, how do the cited OpenAlex literature estimates compare with the live series estimate?`,
   ];
 }
 
@@ -255,6 +267,9 @@ export type SandboxStreamEvent =
       type: "meta";
       persona: SandboxPersona;
       charts: ExtractedSeries[];
+      estimates: EconometricEstimate[];
+      literature: ExtractedLiteratureEstimate[];
+      dataStatusMessage: string;
       followUps: string[];
     }
   | { type: "delta"; text: string }
@@ -269,21 +284,34 @@ export async function* streamSandboxTurn(input: {
   personaId?: string;
 }): AsyncGenerator<SandboxStreamEvent> {
   const persona = detectPersona(input.prompt, input.personaId);
-  const charts = await fetchSandboxMacroSeries(input.prompt);
+  const evidence = await fetchSandboxLiveEvidence(input.prompt);
   const followUps = buildFollowUps(persona);
 
   yield {
     type: "meta",
     persona,
-    charts,
+    charts: evidence.charts,
+    estimates: evidence.estimates,
+    literature: evidence.literature,
+    dataStatusMessage: evidence.dataStatusMessage,
     followUps,
   };
 
-  const chartDigest = charts.map((c) => {
-    const first = c.points[0];
-    const last = c.points[c.points.length - 1];
-    return `${c.seriesId} (${c.title}): latest ${last?.value} ${c.units} on ${last?.date} (from ${first?.value} on ${first?.date})`;
+  const allowedRegistry = buildAllowedNumericRegistry({
+    bundles: evidence.bundles,
+    estimates: evidence.estimates,
+    literature: evidence.literature,
   });
+
+  const estimateLines = evidence.estimates.map(
+    (e) =>
+      `${e.spec.outcomeSeriesId} (${e.methodLabel} · ${e.honestyLabel}): β = ${e.pointEstimate}, SE = ${e.standardError}, 95% CI [${e.ciLower}, ${e.ciUpper}], p = ${e.pValue}, N = ${e.sampleSize} (${e.sampleWindow.start} to ${e.sampleWindow.end})`,
+  );
+
+  const litLines = evidence.literature.map(
+    (l) =>
+      `${l.title} (${l.year ?? "n.d."})${l.pointEstimate !== undefined && l.quoteSpan ? ` — Extracted estimate: ${l.pointEstimate} (“${l.quoteSpan}”)` : ""}`,
+  );
 
   const preferred = process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
   const models = [preferred, ...FALLBACK_MODELS].filter(
@@ -291,23 +319,21 @@ export async function* streamSandboxTurn(input: {
   );
 
   const systemPrompt = `${persona.voicePrompt}
+IMPORTANT LABELING & NUMERIC RULES:
+1. You are a "${persona.perspectiveBanner}".
+2. You MUST NOT introduce, guess, or recall any numbers of your own. You may ONLY cite exact numbers present in "computedEstimates" or "literatureWithQuotes". If no estimates are present, state explicitly that live series data is unavailable and conduct a purely qualitative institutional critique without numbers.
 
-Structure your response into 4 vivid, visual sections using exact plain section headers:
-## Through the Lens of ${persona.name}
-## Reading Today's Macro Regime
-## Where Modern Orthodoxy Goes Astray
-## Policy Prescription & Incidence
+Structure your response into 4 sections:
+## ${persona.perspectiveBanner}
+## Reading This Run's Estimates & Literature
+## Where Modern Orthodoxy or the Specification Is Vulnerable
+## Falsification Fork & Policy Incidence`;
 
-Rules:
-- Cite the exact FRED series IDs and latest numbers provided in the prompt (e.g. CPIAUCSL, FEDFUNDS, UNRATE, GDPC1, IMPGS) as you make your argument.
-- Keep paragraphs punchy, insightful, and true to ${persona.name}'s intellectual voice.
-- Use bullet points where helpful for sharp contrasts.`;
-
-  let streamedAny = false;
+  let generatedText = "";
   if (hasSandboxAiCredentials()) {
     for (const modelId of models) {
       try {
-        const result = streamText({
+        const { text } = await generateText({
           model: resolveSandboxAiModel(modelId),
           providerOptions: {
             openai: {
@@ -320,37 +346,48 @@ Rules:
             userPrompt: input.prompt,
             persona: persona.name,
             era: persona.era,
-            liveFredIndicators: chartDigest,
+            dataStatusMessage: evidence.dataStatusMessage,
+            computedEstimates: estimateLines,
+            literatureWithQuotes: litLines,
           }),
         });
-        for await (const delta of result.textStream) {
-          if (!delta) continue;
-          streamedAny = true;
-          yield { type: "delta", text: delta };
+        if (text && text.trim()) {
+          generatedText = text.trim();
+          break;
         }
-        if (streamedAny) break;
       } catch {
         continue;
       }
     }
   }
 
-  if (!streamedAny) {
-    const fallbackText = [
-      `## Through the Lens of ${persona.name}`,
-      `Observing the present commonwealth from the vantage of ${persona.era}, the great engine of prosperity remains what it has ever been: the division of labor bounded only by the extent of the market, and the steady accumulation of productive stock.`,
+  if (!generatedText) {
+    generatedText = [
+      `## ${persona.perspectiveBanner}`,
+      `*(Simulated perspective — ${persona.name}, ${persona.era})*`,
       "",
-      `## Reading Today's Macro Regime`,
-      ...chartDigest.map((line) => `- **${line}**`),
+      `## Reading This Run's Estimates & Literature`,
+      estimateLines.length > 0
+        ? estimateLines.map((l) => `- ${l}`).join("\n")
+        : `- **${evidence.dataStatusMessage}** No synthetic or fallback numbers are substituted.`,
+      ...(litLines.length > 0
+        ? ["", "### Cited OpenAlex Literature", ...litLines.map((l) => `- ${l}`)]
+        : []),
       "",
-      `## Where Modern Orthodoxy Goes Astray`,
-      `Modern ministers flatter themselves that mercantile restraints, custom-house duties, and paper credit can conjure real wealth without taxing the industrious household or narrowing the market.`,
+      `## Where Modern Orthodoxy or the Specification Is Vulnerable`,
+      `From the standpoint of ${persona.school}, any single-equation trajectory must be tested against confounding regime shifts, price-system substitution, and long-run supply response.`,
       "",
-      `## Policy Prescription & Incidence`,
-      `Restore simple, predictable rules of commerce, anchor the value of the currency, and judge every tariff or bounty by who ultimately pays the price at the retail counter.`,
+      `## Falsification Fork & Policy Incidence`,
+      `Promote this inquiry to a full Workbench Run to lock a pre-registered Scope Contract and compare alternative specification forks side-by-side.`,
     ].join("\n");
-    yield { type: "delta", text: fallbackText };
+  } else {
+    // Run deterministic numeric auditor on persona prose so personas cannot introduce numbers
+    const audited = auditGeneratedProseNumbers(generatedText, allowedRegistry, {
+      stripUntraced: true,
+    });
+    generatedText = audited.sanitizedText;
   }
 
+  yield { type: "delta", text: generatedText };
   yield { type: "done" };
 }

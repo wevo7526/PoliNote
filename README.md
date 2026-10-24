@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/brand/polinote-banner.png" alt="PoliNote — Economic Analysis Engine & Policy Digression Workbench" width="100%" />
+  <img src="docs/brand/polinote-banner.png" alt="PoliNote — Econometric Policy Workbench & Digression Engine" width="100%" />
 </div>
 
 <br />
@@ -8,100 +8,47 @@
 
 # PoliNote
 
-**An economic analysis engine and policy digression workbench.**
+**A pre-registered econometric estimation and policy digression workbench.**
 
-Bring a real policy instrument, a target population, and a time horizon. PoliNote locks a formal **Scope Contract**, builds a 5-stage **Policy Argument Graph** with explicit counterfactual branches, attaches empirical time-series and literature spans via **MCP**, models **Baseline vs. Policy Trajectories** and **Distributional Incidence**, and compiles publication-ready **Word (`.docx`)** and **PDF (`.pdf`)** reports with embedded figures.
+Bring a real policy instrument, a target population, and a time horizon. PoliNote locks a cryptographic **Pre-Registration & Scope Contract**, pulls live time-series data from **FRED/ALFRED, BEA, BLS, U.S. Census, and World Bank**, executes real econometric estimators (**Event Studies, Jordà Local Projections, Difference-in-Differences, Synthetic Control, Chow/Bai–Perron Structural Break Tests**) with **Newey–West HAC** standard errors, runs an automatic **Specification Curve** across windows, transforms, and placebos, audits every number in prose with a deterministic **Data Auditor**, and exports publication-ready **Word (`.docx`), PDF (`.pdf`), CSV Bundles, and Runnable Jupyter Notebooks (`.ipynb`)**.
 
 </div>
 
 ---
 
-## Why PoliNote Exists
+## Two First-Class Halves: Analysis & Digression
 
-Serious economic policy questions — a 25% tariff on battery-electric vehicles, a by-right transit upzoning mandate, a carbon border adjustment on steel, or a semiconductor investment tax credit — do not resolve into a single paragraph. They fork across legal constraints, price pass-through elasticities, supply-chain substitution, and regional or household incidence.
+1. **ANALYSIS (Real, Reproducible Econometrics on Live Data)**:
+   - **Zero Hard-Coded Data or Templates**: Every series is searched and fetched live at run time with a SHA-256 raw payload snapshot, vintage date, seasonal adjustment, and license attribution. If a provider key is missing or an endpoint is unreachable, the step fails visibly (`Data unavailable: <source> <reason>`) and dependent claims are marked `unverifiable`.
+   - **Pre-Registration Lock**: Scope, series IDs, transforms, estimator, and observation window lock with a SHA-256 hash and timestamp *before* estimation runs. Post-lock edits spawn an explicit **Specification Fork** linked to its parent hash.
+   - **Automatic Robustness & Specification Curve**: Every headline estimate is automatically re-estimated across narrow/extended windows, growth-rate/log transforms, macro controls, and in-time pre-policy placebos.
+   - **Deterministic Numeric Auditor**: The LLM crew reasons, plans, and writes—it never computes or invents numbers. Code extracts every numeric figure in generated text and verifies that it matches a fetched observation, computed estimate, or quote-backed OpenAlex study.
 
-PoliNote turns policy analysis into a **structured, verifiable artifact**:
-1. **Every claim has a place on the Policy Spine** (`01 Policy Rule` → `02 Mechanism` → `03 Core Finding` → `04 Empirical Data` → `05 Who Pays / Gains`) or in the **Digression Band** (`What-If Baselines`, `Design Forks`, and `Key Risks`).
-2. **Every output is quantitatively and empirically grounded**, pairing live **FRED** macroeconomic and sector series with **Counterfactual Fan Projections (2021–2030)**, **Dynamic Impulse-Response Functions (Q+1 to Q+8)**, and **Distributional Welfare Splits**.
-3. **Every conclusion is traceable**, showing the exact agent role that created a node, the hashed MCP evidence span that verified it, and the 5-section economic analysis behind it.
-
----
-
-## Core Capabilities & Workspaces
-
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <h3>Projects Hub</h3>
-      <p>Organize related inquiries inside persistent <strong>Projects</strong>. Each project maintains shared standing instructions, accumulates verified nodes and empirical charts across runs, and compiles a unified <strong>Project Master Report</strong>.</p>
-    </td>
-    <td width="33%" valign="top">
-      <h3>Run & Blueprint Graph</h3>
-      <p>Watch the 6-role crew assemble the policy spine and digression branches in real time. Inspect inline time-series projections, expand 5-section node analyses directly in the output panel, or scrub backward and forward through the domain event timeline.</p>
-    </td>
-    <td width="33%" valign="top">
-      <h3>Report & Word / PDF Export</h3>
-      <p>Compile run or project findings with AI and download native <strong>Microsoft Word (<code>.docx</code>)</strong> or <strong>PDF (<code>.pdf</code>)</strong> reports complete with high-resolution embedded charts, node provenance tables, and a verified bibliography.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="33%" valign="top">
-      <h3>Full Knowledge Graph Map</h3>
-      <p>Filter the argument by <em>Main Spine</em>, <em>Branches</em>, <em>Verified</em>, or <em>Needs Proof</em>. Hover any node to highlight its causal chain, contest or exclude nodes, or click <strong>+ Branch / Digress from this node</strong> to test a deeper mechanism.</p>
-    </td>
-    <td width="33%" valign="top">
-      <h3>Scope Protocol & Slice Invalidation</h3>
-      <p>Lock jurisdiction, horizon, instrument, target benchmark, identification strategy, and baseline. Editing the Scope Contract automatically identifies affected downstream nodes, marks them for re-verification, and re-runs only the invalidated slice.</p>
-    </td>
-    <td width="33%" valign="top">
-      <h3>Persona & Macro Sandbox</h3>
-      <p>Explore macro regimes and policy counterfactuals through the intellectual lenses of <strong>Adam Smith</strong>, <strong>John Maynard Keynes</strong>, <strong>Milton Friedman</strong>, <strong>Alexander Hamilton</strong>, <strong>Elinor Ostrom</strong>, or <strong>Paul Volcker</strong> — grounded in live FRED charts and promotable to a full Project Run in one click.</p>
-    </td>
-  </tr>
-</table>
+2. **DIGRESSION (The Argument Map, Forks, Critiques & Personas)**:
+   - **5-Stage Policy Spine + Digression Band**: `01 Policy Rule` → `02 Mechanism & Identification` → `03 Testable Claim` → `04 Empirical Proof` → `05 Distributional Incidence`, with `Counterfactuals`, `Pre-Registration Forks`, and `Skeptic Red-Team Critiques` mapped below.
+   - **Strict Claim Lifecycle**: `proposed` → `data_attached` → `tested` → `supported` / `contradicted` / `inconclusive` / `unverifiable`, set **only** by deterministic code rules on the estimate (sign match, 95% CI excluding zero, pre-trend test pass, and specification curve pass rate).
+   - **Simulated Perspective Sandbox**: Historical lenses (Adam Smith, Keynes, Friedman, Hamilton, Ostrom, Volcker) are explicitly labeled `Simulated perspective` and debate strictly over the run's actual estimates and cited literature without introducing numbers.
 
 ---
 
-## The 5-Stage Policy Spine & Node Taxonomy
+## The 9-Role Crew (`src/agents/roles.ts`)
 
-Every node on the PoliNote canvas has an explicit analytical role and verification status:
-
-| Stage / Lane | Node Type | Role in the Policy Argument |
+| # | Role ID | Responsibility |
 |---|---|---|
-| **01 · Policy Rule** | `constraint` | The concrete statute, tariff, tax credit, zoning rule, or regulatory mandate being evaluated — and its higher-law bounds. |
-| **02 · Mechanism** | `mechanism` | The causal transmission channel (price pass-through, factor substitution, capital formation) set in motion by the rule. |
-| **03 · Core Finding** | `claim` | A testable quantitative prediction about prices, output, employment, or fiscal balance relative to the baseline. |
-| **04 · Empirical Data** | `evidence` | Hashed proof spans pulled from allowlisted MCP servers (FRED economic series, OpenAlex peer-reviewed studies, official policy docs). |
-| **05 · Who Pays / Gains** | `incidence` | Economic vs. statutory incidence across households, domestic producers, downstream firms, workers, and public budgets. |
-| **Digression Branches** | `counterfactual` · `fork` · `uncertainty` | Status-quo baselines, policy design forks where outcomes split, and identification risks or unmeasured confounders. |
+| 1 | `scoper` | Locks the **Scope Contract**, policy date, unit of analysis, treatment/control candidates, and directional hypothesis. |
+| 2 | `data_scout` | Searches live providers (FRED/ALFRED, BEA, BLS, Census, World Bank) and validates candidate metadata (coverage window, frequency, seasonal adjustment, discontinued flag). |
+| 3 | `identification_strategist` | Selects an estimator from the method catalog (`METHOD_CATALOG`), states identifying assumptions, and names confounders in the window. |
+| 4 | `econometrician` | Defines the estimation specification; deterministic code executes OLS/HAC, Event Studies, Jordà Local Projections, Synthetic Control, and the Specification Curve. |
+| 5 | `literature_analyst` | Queries OpenAlex for peer-reviewed studies and extracts empirical estimates only when backed by a verbatim quote span. |
+| 6 | `skeptic` | Red-team critique of confounders, reverse causality, and pre-trend fragility; proposes interactive **“What would change my mind”** falsification forks. |
+| 7 | `data_auditor` | **Deterministic code** (not an LLM) that matches every number in prose against fetched observations and computed estimates, stripping any untraced numbers. |
+| 8 | `synthesizer` | Compiles the executive brief and methodology appendix referencing only verified node/estimate IDs and stating honesty labels (`Descriptive`, `Associational`, `Quasi-experimental (method)`, `Literature estimate (citation)`). |
+| 9 | `trace_narrator` | Produces the plain-language provenance walkthrough across all 7 pipeline stages. |
 
 ---
 
-## Quantitative Economic Analysis & Time-Series Engine
+## Diagnostics, Reproducibility & Evaluation
 
-PoliNote pairs empirical retrieval with structural economic visualization across every run, node modal, and exported report:
-
-- **Counterfactual Time-Series Fan Projections (2021–2030)**: Benchmarks historical pre-policy trajectories against the **Status-Quo Baseline** and the **Enacted Policy Path** with a shaded **90% Confidence Interval Fan**.
-- **Dynamic Impulse-Response Curves (Q+1 to Q+8)**: Maps quarter-by-quarter transmission across **Price / Cost Pass-Through**, **Real Sector Output**, and **Employment / Fiscal Balance** to distinguish short-run rigidities from medium-run supply responses.
-- **Distributional Incidence & Welfare Split**: Quantifies net percentage surplus/income shifts and confidence bounds across stakeholder groups.
-- **In-App MCP Verification**:
-  - `econ-series`: St. Louis Fed (**FRED**) series search, multi-period observations, and vintage dates.
-  - `literature`: **OpenAlex** peer-reviewed empirical economics search.
-  - `policy-docs`: Official statutory, congressional, and regulatory document retrieval.
-  - `workspace` & `trace`: Project/run working memos and append-only domain event replay.
-
----
-
-## Hard Analytical Guarantees
-
-- **Scope Readiness Gate**: The graph cannot graduate to ready until **instrument**, **target**, **identification strategy**, and **horizon** are locked in the Scope Contract.
-- **Empirical Verification Wall**: No node can be marked `Verified` (`supported`) without at least one hashed MCP evidence span attached. The **Critic** role audits identification risks and cannot fabricate positive claims.
-- **Grounded Synthesis**: Every factual claim in the compiled brief and technical appendix cites its backing graph node (`[node_key]`), rendering as an interactive pill that opens that node's provenance trace and time-series chart.
-- **Targeted Subgraph Invalidation**: Modifying a Scope Contract field (`instrument`, `identificationStrategy`, `target`, `horizon`, `baseline`) diffs the contract and marks only the dependent downstream subgraph for re-evaluation.
-- **Session Isolation**: Each researcher's projects, runs, graphs, and event logs are isolated in a per-user DuckDB store hydrated across serverless functions.
-
-<div align="center">
-  <br />
-  <em>Lock the scope. Map the spine. Verify with data. Export the report.</em>
-  <br /><br />
-</div>
+- **Health & Startup Validation (`/api/health`)**: Validates environment configuration (`FRED_API_KEY`, `BEA_API_KEY`, `BLS_API_KEY`, `CENSUS_API_KEY`, `OPENAI_API_KEY`, `DATABASE_URL`, `SESSION_SECRET`) with Zod and reports live reachability across DB, FRED, BEA, BLS, Census, OpenAlex, World Bank, and OpenAI.
+- **Reproducible Exports**: Download native `.docx` and `.pdf` reports, full `.csv` provenance data bundles, and runnable **Jupyter Notebooks (`.ipynb`)** that re-pull live data, diff vintage revisions against the run's SHA-256 snapshot, and reproduce every regression with `statsmodels`.
+- **Benchmark Suite (`src/lib/evaluation/benchmarks.ts`)**: 20 literature-backed policy questions (TCJA business investment, 2018 tariff pass-through, Volcker disinflation, CHIPS/IRA manufacturing construction, minimum wage elasticity, etc.) + automated unit and static guard tests (`npm test`).

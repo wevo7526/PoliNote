@@ -1,11 +1,24 @@
 "use client";
 
+import { useMemo, useState } from "react";
+import type { DataProvenance, FetchedSeriesBundle } from "@/lib/data/types";
 import type {
   CounterfactualSeries,
   EconomicScorecard,
   ImpulseResponseSeries,
   IncidenceBarItem,
+  RunEconomicModel,
 } from "@/lib/economics/engine";
+import {
+  buildDefaultSkepticForks,
+  evaluateSpecificationFork,
+  type ForkComparisonResult,
+} from "@/lib/economics/forks";
+import {
+  METHOD_CATALOG,
+  type EconometricEstimate,
+  type RobustnessBundle,
+} from "@/lib/economics/schemas";
 import { LANE_LABEL, SPINE_LANES, nodeLane, type PolicyLane } from "@/lib/ai/layout";
 import {
   NODE_KIND_TAXONOMY,
@@ -14,6 +27,7 @@ import {
 import { shortNodeKey } from "@/lib/ui/prose";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionNode } from "@/schemas/digression";
+import type { RunEvent } from "@/schemas/run-event";
 
 export type ExtractedSeries = {
   key: string;
@@ -22,6 +36,9 @@ export type ExtractedSeries = {
   units: string;
   url?: string;
   spanId?: string;
+  vintage?: string;
+  resultHash?: string;
+  provenance?: DataProvenance;
   nodeTitle: string;
   points: Array<{ date: string; value: number }>;
 };
@@ -42,12 +59,80 @@ export function extractFredSeries(nodes: DigressionNode[]): ExtractedSeries[] {
         units: chip.units ?? "",
         url: chip.url,
         spanId: chip.spanId,
+        vintage: chip.vintage,
+        resultHash: chip.resultHash,
         nodeTitle: node.title,
         points: chip.seriesPoints,
       });
     }
   }
   return out;
+}
+
+/**
+ * 7-Stage Run Timeline Strip:
+ * Scope -> Lock -> Fetch -> Estimate -> Robustness -> Critique -> Synthesis
+ */
+export function RunTimelineStrip({
+  events = [],
+  nodes = [],
+  busy = false,
+  hasEstimates = false,
+}: {
+  events?: RunEvent[];
+  nodes?: DigressionNode[];
+  busy?: boolean;
+  hasEstimates?: boolean;
+}) {
+  const hasScope = events.some((e) => e.type === "scope.updated") || nodes.length > 0;
+  const hasFetch = events.some((e) => e.type === "mcp.tool_result");
+  const hasFailedFetch =
+    !hasFetch &&
+    (events.some((e) => e.type === "mcp.tool_call") ||
+      nodes.some((n) => n.status === "unverifiable"));
+  const hasCritique =
+    events.some((e) => e.type === "critic.flag") ||
+    events.some((e) => e.agent === "skeptic" || e.agent === "critic") ||
+    nodes.some((n) => n.status !== "proposed");
+  const hasSynth = events.some((e) => e.type === "export.generated" || e.type === "run.completed");
+
+  const stages = [
+    { id: "scope", label: "1. Scope", done: hasScope, error: false },
+    { id: "lock", label: "2. Lock Spec", done: hasScope, error: false },
+    { id: "fetch", label: "3. Live Fetch", done: hasFetch, error: hasFailedFetch && !busy },
+    { id: "estimate", label: "4. Estimate", done: hasEstimates || hasFetch, error: hasFailedFetch && !busy },
+    { id: "robustness", label: "5. Robustness", done: hasEstimates || hasFetch, error: false },
+    { id: "critique", label: "6. Skeptic Critique", done: hasCritique, error: false },
+    { id: "synthesis", label: "7. Audited Synthesis", done: hasSynth, error: false },
+  ];
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1.5 border border-[var(--line)] bg-[var(--bg)]/65 px-3 py-2"
+      role="region"
+      aria-label="7-stage econometric run timeline"
+    >
+      <span className="mr-1 text-[9.5px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+        Pipeline:
+      </span>
+      {stages.map((st) => (
+        <span
+          key={st.id}
+          className={`px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em] ${
+            st.error
+              ? "border border-[#d46a6a]/50 bg-[#d46a6a]/15 text-[#d46a6a]"
+              : st.done
+                ? "border border-[#8fbf9a]/45 bg-[#8fbf9a]/12 text-[#8fbf9a]"
+                : busy
+                  ? "border border-[var(--copper)]/40 bg-[var(--copper)]/10 text-[var(--copper)]"
+                  : "border border-[var(--line)] bg-[var(--paper)] text-[var(--muted)]"
+          }`}
+        >
+          {st.error ? `✕ ${st.label}` : st.done ? `✓ ${st.label}` : st.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 export function EconomicScorecardBanner({
@@ -58,20 +143,30 @@ export function EconomicScorecardBanner({
   compact?: boolean;
 }) {
   const items = [
-    { label: "Policy Instrument Shock", value: scorecard.shockMagnitude, accent: "text-[var(--copper)]" },
-    { label: "Net Effect vs. Baseline", value: scorecard.primaryMetricDelta, accent: "text-[#8fbf9a]" },
-    { label: "Peak Channel Response", value: scorecard.realOutputDelta, accent: "text-[var(--ink)]" },
-    { label: "Elasticity & Pass-Through", value: scorecard.elasticitySummary, accent: "text-[var(--ink)]" },
-    { label: "Transmission Horizon", value: scorecard.timeToPeak, accent: "text-[var(--muted)]" },
-    { label: "Empirical Standing", value: scorecard.verificationStanding, accent: "text-[#8fbf9a]" },
+    { label: "Sample & Policy Date", value: scorecard.shockMagnitude, accent: "text-[var(--copper)]" },
+    { label: "Point Estimate & 95% CI", value: scorecard.primaryMetricDelta, accent: "text-[#8fbf9a]" },
+    { label: "Local Projection Peak", value: scorecard.realOutputDelta, accent: "text-[var(--ink)]" },
+    { label: "SE Method & p-value", value: scorecard.elasticitySummary, accent: "text-[var(--ink)]" },
+    { label: "Observation Window", value: scorecard.timeToPeak, accent: "text-[var(--muted)]" },
+    { label: "Robustness & Honesty Label", value: scorecard.verificationStanding, accent: "text-[#8fbf9a]" },
   ];
 
   return (
     <div className="border border-[var(--line)] bg-[var(--paper)] p-3.5">
       <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
         <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-          Quantitative Economic Analysis Engine · {scorecard.domainLabel}
+          Live Econometric Analysis · {scorecard.domainLabel}
         </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="border border-[var(--copper)]/45 bg-[var(--copper)]/12 px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-[var(--copper)]">
+            {scorecard.honestyLabel}
+          </span>
+          {scorecard.preRegistrationHash ? (
+            <span className="font-mono text-[10px] text-[var(--muted)]">
+              Lock: {scorecard.preRegistrationHash}
+            </span>
+          ) : null}
+        </div>
       </div>
       <div className={`grid gap-2.5 ${compact ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
         {items.map((item) => (
@@ -93,27 +188,42 @@ export function EconomicScorecardBanner({
 }
 
 /**
- * Counterfactual Time-Series Fan Chart:
- * Plots Historical Actuals (2021-2025) -> Status-Quo Baseline vs. Enacted Policy Trajectory (2026-2030) with 90% CI Fan.
+ * Counterfactual Time-Series Chart:
+ * Plots actual observations vs. pre-policy counterfactual projection with estimated HAC CIs.
+ * Never renders fabricated numbers when series is null.
  */
 export function CounterfactualTrajectoryChart({
   series,
   compact = false,
 }: {
-  series: CounterfactualSeries;
+  series: CounterfactualSeries | null;
   compact?: boolean;
 }) {
-  const pts = series.points;
-  if (pts.length < 3) return null;
+  if (!series || series.points.length < 3) {
+    return (
+      <article className="report-chart-card">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#d46a6a]">
+          Counterfactual Trajectory · Data Unavailable
+        </p>
+        <p className="mt-1 text-xs text-[var(--muted)]">
+          No live series observations available for counterfactual estimation. Configure <code className="text-[var(--copper)]">FRED_API_KEY</code> or select an active series. Zero fallback numbers are substituted.
+        </p>
+      </article>
+    );
+  }
 
+  const pts = series.points;
   const allVals = pts.flatMap((p) => [p.baseline, p.policy, p.lowerBand, p.upperBand]);
-  const minV = Math.min(...allVals) - 1.5;
-  const maxV = Math.max(...allVals) + 1.5;
-  const range = maxV - minV || 1;
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const padRange = (maxV - minV) * 0.08 || 1;
+  const lowBound = minV - padRange;
+  const highBound = maxV + padRange;
+  const range = highBound - lowBound || 1;
 
   const w = 540;
-  const h = compact ? 148 : 168;
-  const padL = 34;
+  const h = compact ? 152 : 172;
+  const padL = 42;
   const padR = 18;
   const padT = 18;
   const padB = 26;
@@ -121,7 +231,7 @@ export function CounterfactualTrajectoryChart({
   const plotH = h - padT - padB;
 
   const xOf = (idx: number) => padL + (idx / Math.max(1, pts.length - 1)) * plotW;
-  const yOf = (val: number) => padT + plotH - ((val - minV) / range) * plotH;
+  const yOf = (val: number) => padT + plotH - ((val - lowBound) / range) * plotH;
 
   const baseCoords = pts.map((p, i) => ({ x: xOf(i), y: yOf(p.baseline), p }));
   const polCoords = pts.map((p, i) => ({ x: xOf(i), y: yOf(p.policy), p }));
@@ -133,7 +243,6 @@ export function CounterfactualTrajectoryChart({
     .map((c, i) => `${i === 0 ? "M" : "L"} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`)
     .join(" ");
 
-  // Confidence fan polygon over forecast indices (index 4 onwards)
   const forecastStartIdx = Math.max(0, pts.findIndex((p) => p.isForecast) - 1);
   const fanSlice = pts.slice(forecastStartIdx);
   const upperPoints = fanSlice.map((p, idx) => {
@@ -149,15 +258,21 @@ export function CounterfactualTrajectoryChart({
   const interventionIdx = Math.max(0, pts.findIndex((p) => p.isForecast));
   const interventionX = xOf(interventionIdx);
   const net = series.netPolicyEffectPct;
+  const prov = series.provenance;
 
   return (
     <article className="report-chart-card">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-            Counterfactual Time-Series Projection · {series.units}
-          </p>
-          <h3 className="mt-0.5 font-[family-name:var(--font-display)] text-base leading-snug text-[var(--ink)]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+              Actual vs. Pre-Policy Counterfactual · {series.units}
+            </span>
+            <span className="border border-[var(--line)] bg-[var(--bg)]/60 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-[#8fbf9a]">
+              {series.honestyLabel}
+            </span>
+          </div>
+          <h3 className="mt-1 font-[family-name:var(--font-display)] text-base leading-snug text-[var(--ink)]">
             {series.title}
           </h3>
           <p className="mt-0.5 text-[11px] text-[var(--muted)]">{series.subtitle}</p>
@@ -168,24 +283,23 @@ export function CounterfactualTrajectoryChart({
               net >= 0 ? "text-[#8fbf9a]" : "text-[#d4a08c]"
             }`}
           >
-            {net >= 0 ? `+${net}%` : `${net}%`}
+            β = {net >= 0 ? `+${net}` : `${net}`}
           </p>
           <p className="font-mono text-[10px] text-[var(--muted)]">
-            Policy vs. Baseline (2030)
+            {series.seMethod}
           </p>
         </div>
       </div>
 
       <svg
         viewBox={`0 0 ${w} ${h}`}
-        className={`mt-2.5 w-full ${compact ? "h-32" : "h-40"}`}
+        className={`mt-2.5 w-full ${compact ? "h-36" : "h-44"}`}
         role="img"
-        aria-label={series.title}
+        aria-label={`Counterfactual trajectory chart for ${series.title}`}
       >
-        {/* Horizontal gridlines */}
         {[0, 0.5, 1].map((t) => {
           const gy = padT + t * plotH;
-          const val = maxV - t * range;
+          const val = highBound - t * range;
           return (
             <g key={t}>
               <line
@@ -197,13 +311,12 @@ export function CounterfactualTrajectoryChart({
                 strokeDasharray="3 3"
               />
               <text x={4} y={gy + 3} fill="#9a9284" fontSize={8.5}>
-                {val.toFixed(0)}
+                {val.toFixed(1)}
               </text>
             </g>
           );
         })}
 
-        {/* Policy Intervention vertical marker */}
         <line
           x1={interventionX}
           y1={padT}
@@ -213,19 +326,17 @@ export function CounterfactualTrajectoryChart({
           strokeDasharray="4 3"
         />
         <text
-          x={interventionX + 5}
+          x={Math.min(w - 130, interventionX + 5)}
           y={padT + 10}
           fill="#d4b483"
           fontSize={8.5}
           fontWeight={600}
         >
-          Policy Enacted ({series.interventionPeriod}) →
+          Policy Date ({series.interventionPeriod.slice(0, 7)}) →
         </text>
 
-        {/* 90% CI Fan */}
         <polygon points={fanPolygon} fill="rgba(143,191,154,0.16)" />
 
-        {/* Status-Quo Baseline */}
         <path
           d={basePath}
           fill="none"
@@ -234,75 +345,74 @@ export function CounterfactualTrajectoryChart({
           strokeDasharray="5 4"
         />
 
-        {/* Policy Trajectory */}
-        <path d={polPath} fill="none" stroke="#8fbf9a" strokeWidth={2.3} />
+        <path d={polPath} fill="none" stroke="#8fbf9a" strokeWidth={2.2} />
 
-        {polCoords.map((c, idx) =>
-          idx === 0 || idx === interventionIdx || idx === polCoords.length - 1 ? (
-            <circle key={c.p.period} cx={c.x} cy={c.y} r={3} fill="#d4b483" />
-          ) : null,
-        )}
-
-        {/* X-Axis Period Labels */}
         {pts.map((pt, idx) =>
-          idx % 2 === 0 || idx === pts.length - 1 ? (
+          idx === 0 || idx === interventionIdx || idx === pts.length - 1 ? (
             <text
-              key={pt.period}
+              key={`${pt.period}-${idx}`}
               x={xOf(idx)}
               y={h - 6}
-              textAnchor="middle"
+              textAnchor={idx === 0 ? "start" : idx === pts.length - 1 ? "end" : "middle"}
               fill="#9a9284"
               fontSize={9}
             >
-              {pt.period}
+              {pt.period.slice(0, 7)}
             </text>
           ) : null,
         )}
       </svg>
 
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-2 text-[10.5px] text-[var(--muted)]">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-2 w-2 rounded-full bg-[#8fbf9a]" />
-            Policy Path (+90% CI Fan)
+            Observed Series ({prov?.seriesId ?? "Live"})
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-0.5 w-3 bg-[#9a9284]" />
-            Status-Quo Baseline
+            Pre-Policy Counterfactual (+95% HAC CI)
           </span>
         </div>
-        <span className="font-mono text-[10px]">
-          2030 Policy: {pts[pts.length - 1]?.policy} vs. Baseline: {pts[pts.length - 1]?.baseline}
-        </span>
+        {prov ? (
+          <span className="font-mono text-[10px]">
+            Source: {prov.source.toUpperCase()} · Vintage: {prov.vintageDate ?? "latest"} · SHA-256: {prov.payloadSha256.slice(0, 10)}
+          </span>
+        ) : null}
       </div>
     </article>
   );
 }
 
 /**
- * Dynamic Impulse-Response Chart (Q+1 to Q+8) across Price, Output, and Labor/Fiscal channels.
+ * Jordà Local Projections Impulse-Response Chart with HAC Confidence Bands.
  */
 export function ImpulseResponseChart({
   series,
   compact = false,
 }: {
-  series: ImpulseResponseSeries;
+  series: ImpulseResponseSeries | null;
   compact?: boolean;
 }) {
-  const pts = series.points;
-  if (pts.length < 2) return null;
+  if (!series || series.points.length < 2) {
+    return null;
+  }
 
+  const pts = series.points;
   const allVals = [
     0,
     ...pts.flatMap((p) => [p.priceChannel, p.outputChannel, p.employmentFiscalChannel]),
   ];
-  const minV = Math.min(...allVals) - 1.2;
-  const maxV = Math.max(...allVals) + 1.2;
-  const range = maxV - minV || 1;
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const pad = (maxV - minV) * 0.1 || 1;
+  const lowV = minV - pad;
+  const highV = maxV + pad;
+  const range = highV - lowV || 1;
 
   const w = 540;
-  const h = compact ? 148 : 168;
-  const padL = 34;
+  const h = compact ? 152 : 172;
+  const padL = 42;
   const padR = 18;
   const padT = 18;
   const padB = 26;
@@ -310,7 +420,7 @@ export function ImpulseResponseChart({
   const plotH = h - padT - padB;
 
   const xOf = (idx: number) => padL + (idx / Math.max(1, pts.length - 1)) * plotW;
-  const yOf = (val: number) => padT + plotH - ((val - minV) / range) * plotH;
+  const yOf = (val: number) => padT + plotH - ((val - lowV) / range) * plotH;
   const zeroY = yOf(0);
 
   const buildPath = (pick: (p: (typeof pts)[number]) => number) =>
@@ -318,14 +428,29 @@ export function ImpulseResponseChart({
       .map((p, i) => `${i === 0 ? "M" : "L"} ${xOf(i).toFixed(1)} ${yOf(pick(p)).toFixed(1)}`)
       .join(" ");
 
+  const upperPoly = pts.map((p, i) => `${xOf(i).toFixed(1)},${yOf(p.outputChannel).toFixed(1)}`);
+  const lowerPoly = [...pts]
+    .reverse()
+    .map((p, idx) => {
+      const i = pts.length - 1 - idx;
+      return `${xOf(i).toFixed(1)},${yOf(p.employmentFiscalChannel).toFixed(1)}`;
+    });
+  const ciPolygon = [...upperPoly, ...lowerPoly].join(" ");
+  const prov = series.provenance;
+
   return (
     <article className="report-chart-card">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-            Dynamic Impulse-Response Curves · {series.units}
-          </p>
-          <h3 className="mt-0.5 font-[family-name:var(--font-display)] text-base leading-snug text-[var(--ink)]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+              Jordà Local Projections Impulse Response · {series.units}
+            </span>
+            <span className="border border-[var(--line)] bg-[var(--bg)]/60 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-[#9bb4d4]">
+              {series.honestyLabel}
+            </span>
+          </div>
+          <h3 className="mt-1 font-[family-name:var(--font-display)] text-base leading-snug text-[var(--ink)]">
             {series.title}
           </h3>
           <p className="mt-0.5 text-[11px] text-[var(--muted)]">{series.subtitle}</p>
@@ -334,7 +459,7 @@ export function ImpulseResponseChart({
 
       <svg
         viewBox={`0 0 ${w} ${h}`}
-        className={`mt-2.5 w-full ${compact ? "h-32" : "h-40"}`}
+        className={`mt-2.5 w-full ${compact ? "h-36" : "h-44"}`}
         role="img"
         aria-label={series.title}
       >
@@ -347,34 +472,36 @@ export function ImpulseResponseChart({
           strokeDasharray="3 3"
         />
         <text x={4} y={zeroY + 3} fill="#9a9284" fontSize={8.5}>
-          0%
+          0
         </text>
         <text x={4} y={padT + 6} fill="#9a9284" fontSize={8.5}>
-          +{maxV.toFixed(1)}%
+          {highV.toFixed(1)}
         </text>
         <text x={4} y={padT + plotH} fill="#9a9284" fontSize={8.5}>
-          {minV.toFixed(1)}%
+          {lowV.toFixed(1)}
         </text>
 
-        {/* 3 Dynamic Channels */}
-        <path
-          d={buildPath((p) => p.priceChannel)}
-          fill="none"
-          stroke="#d4b483"
-          strokeWidth={2.1}
-        />
+        <polygon points={ciPolygon} fill="rgba(212,180,131,0.14)" />
+
         <path
           d={buildPath((p) => p.outputChannel)}
           fill="none"
-          stroke="#8fbf9a"
-          strokeWidth={2.1}
+          stroke="rgba(143,191,154,0.65)"
+          strokeWidth={1.3}
+          strokeDasharray="4 3"
         />
         <path
           d={buildPath((p) => p.employmentFiscalChannel)}
           fill="none"
-          stroke="#9bb4d4"
-          strokeWidth={1.9}
+          stroke="rgba(155,180,212,0.65)"
+          strokeWidth={1.3}
           strokeDasharray="4 3"
+        />
+        <path
+          d={buildPath((p) => p.priceChannel)}
+          fill="none"
+          stroke="#d4b483"
+          strokeWidth={2.2}
         />
 
         {pts.map((pt, idx) => (
@@ -391,50 +518,80 @@ export function ImpulseResponseChart({
         ))}
       </svg>
 
-      <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-[var(--line)] pt-2 text-[10.5px] text-[var(--muted)]">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-[#d4b483]" />
-          {series.channelLabels.price}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-[#8fbf9a]" />
-          {series.channelLabels.output}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-[#9bb4d4]" />
-          {series.channelLabels.employmentFiscal}
-        </span>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-2 text-[10.5px] text-[var(--muted)]">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-[#d4b483]" />
+            {series.channelLabels.price}
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-[#8fbf9a]" />
+            95% Newey–West HAC Confidence Interval
+          </span>
+        </div>
+        {prov ? (
+          <span className="font-mono text-[10px]">
+            {prov.source.toUpperCase()} {prov.seriesId} · Vintage {prov.vintageDate ?? "latest"}
+          </span>
+        ) : null}
       </div>
     </article>
   );
 }
 
 /**
- * Distributional Incidence Diverging Bar Chart:
- * Visualizes quantified welfare/surplus gains and losses across stakeholder groups.
+ * Specification Curve & Robustness Forest Plot:
+ * Shows how the point estimate and 95% CI behave across alternative windows,
+ * transforms, controls, and the in-time placebo check.
  */
 export function DistributionalIncidenceBarChart({
   items,
+  robustness,
 }: {
   items: IncidenceBarItem[];
+  robustness?: RobustnessBundle | null;
 }) {
   if (items.length === 0) return null;
   const maxAbs = Math.max(
-    8,
-    ...items.map((i) => Math.max(Math.abs(i.deltaPct), Math.abs(i.confidenceRange[0]), Math.abs(i.confidenceRange[1]))),
+    1,
+    ...items.map((i) =>
+      Math.max(
+        Math.abs(i.deltaPct),
+        Math.abs(i.confidenceRange[0]),
+        Math.abs(i.confidenceRange[1]),
+      ),
+    ),
   );
 
   return (
     <article className="report-chart-card">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-            Distributional Incidence & Welfare Split
+            Automatic Specification Curve & Robustness Checks
           </p>
           <h3 className="mt-0.5 font-[family-name:var(--font-display)] text-base leading-snug text-[var(--ink)]">
-            Who Pays & Who Gains (% Real Income / Surplus Delta)
+            Sensitivity Across Windows, Transforms, Controls & Placebo
           </h3>
+          {robustness ? (
+            <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+              {robustness.summary}
+            </p>
+          ) : null}
         </div>
+        {robustness ? (
+          <span
+            className={`px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em] ${
+              robustness.signFlipped
+                ? "bg-[#d46a6a]/20 text-[#d46a6a]"
+                : "bg-[#8fbf9a]/20 text-[#8fbf9a]"
+            }`}
+          >
+            {robustness.signFlipped
+              ? "Sign Flip Flagged"
+              : `${Math.round(robustness.passRate * 100)}% Spec Pass Rate`}
+          </span>
+        ) : null}
       </div>
 
       <div className="mt-3 space-y-2.5">
@@ -442,9 +599,9 @@ export function DistributionalIncidenceBarChart({
           const pctWidth = Math.min(48, (Math.abs(item.deltaPct) / maxAbs) * 48);
           const isGain = item.deltaPct >= 0;
           return (
-            <div key={item.stakeholder} className="space-y-1">
-              <div className="flex items-baseline justify-between gap-2 text-xs">
-                <span className=" truncate font-medium text-[var(--ink)]">
+            <div key={item.referenceId || item.stakeholder} className="space-y-1">
+              <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+                <span className="truncate font-medium text-[var(--ink)]">
                   {item.stakeholder}{" "}
                   <span className="text-[10.5px] font-normal text-[var(--muted)]">
                     ({item.role})
@@ -455,14 +612,13 @@ export function DistributionalIncidenceBarChart({
                     isGain ? "text-[#8fbf9a]" : "text-[#d4a08c]"
                   }`}
                 >
-                  {isGain ? `+${item.deltaPct}%` : `${item.deltaPct}%`}{" "}
+                  β = {isGain ? `+${item.deltaPct}` : `${item.deltaPct}`}{" "}
                   <span className="text-[9.5px] font-normal text-[var(--muted)]">
-                    [{item.confidenceRange[0]}%, {item.confidenceRange[1]}%]
+                    95% CI [{item.confidenceRange[0]}, {item.confidenceRange[1]}]
                   </span>
                 </span>
               </div>
 
-              {/* Diverging bar centered at 50% */}
               <div className="relative h-3 w-full bg-[var(--bg)]">
                 <div className="absolute left-1/2 top-0 h-full w-px bg-[var(--line)]" />
                 <div
@@ -476,14 +632,316 @@ export function DistributionalIncidenceBarChart({
                 />
               </div>
 
-              <p className="text-[10.5px] leading-snug text-[var(--muted)]">
-                {item.mechanismNote}
+              <p className="font-mono text-[10px] leading-snug text-[var(--muted)]">
+                {item.mechanismNote} · Ref: {item.referenceId}
               </p>
             </div>
           );
         })}
       </div>
     </article>
+  );
+}
+
+/**
+ * Event Study Dynamic Leads & Lags Plot + Diagnostics Checklist + Interactive Fork Runner
+ */
+export function EconometricResultsPanel({
+  econModel,
+  fredSeries,
+}: {
+  econModel: RunEconomicModel;
+  fredSeries: ExtractedSeries[];
+}) {
+  const [showMethodsDrawer, setShowMethodsDrawer] = useState(false);
+  const [activeForkId, setActiveForkId] = useState<string | null>(null);
+
+  const headline = econModel.headlineEstimate;
+  const forks = useMemo(
+    () => (headline ? buildDefaultSkepticForks(headline) : []),
+    [headline],
+  );
+
+  const forkComparison: ForkComparisonResult | null = useMemo(() => {
+    if (!headline || !activeForkId || fredSeries.length === 0) return null;
+    const forkDef = forks.find((f) => f.id === activeForkId);
+    const primary = fredSeries[0];
+    if (!forkDef || !primary || primary.points.length < 10) return null;
+
+    const bundle: FetchedSeriesBundle = {
+      metadata: {
+        provider: headline.provenance.source,
+        id: primary.seriesId,
+        title: primary.title,
+        units: primary.units,
+        frequency: headline.provenance.frequency,
+        frequencyShort: "unknown",
+        seasonalAdjustment: headline.provenance.seasonalAdjustment,
+        observationStart: primary.points[0]!.date,
+        observationEnd: primary.points[primary.points.length - 1]!.date,
+        lastUpdated: headline.provenance.lastUpdated,
+        discontinued: false,
+        copyrightedThirdParty: headline.provenance.copyrightedThirdParty,
+        licenseAttribution: headline.provenance.licenseAttribution,
+        sourceUrl: headline.provenance.url,
+      },
+      observations: primary.points,
+      provenance: headline.provenance,
+      snapshot: {
+        id: `snap_${primary.seriesId}`,
+        provider: headline.provenance.source,
+        seriesId: primary.seriesId,
+        requestUrl: headline.provenance.url,
+        retrievedAt: headline.provenance.retrievedAt,
+        sha256: headline.provenance.payloadSha256,
+        byteLength: primary.points.length * 24,
+        rawJson: "[]",
+      },
+    };
+
+    try {
+      return evaluateSpecificationFork({
+        baseline: headline,
+        outcome: bundle,
+        fork: forkDef,
+        scopeId: headline.spec.preRegistration.scopeId,
+      });
+    } catch {
+      return null;
+    }
+  }, [activeForkId, forks, fredSeries, headline]);
+
+  if (!headline) {
+    return (
+      <section className="border border-[var(--line)] bg-[var(--paper)] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#d46a6a]">
+              Econometric Estimation Engine · Awaiting Live Series
+            </p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              {econModel.unavailableReason ??
+                "No live series observations are attached to this run yet. Configure FRED_API_KEY and run a query to compute real estimates."}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="node-action text-[var(--copper)]"
+            onClick={() => setShowMethodsDrawer((prev) => !prev)}
+          >
+            {showMethodsDrawer ? "Hide Methods Drawer" : "Methods & Assumptions Drawer"}
+          </button>
+        </div>
+        {showMethodsDrawer ? <MethodsCatalogDrawer /> : null}
+      </section>
+    );
+  }
+
+  const allEstimates: EconometricEstimate[] = [
+    headline,
+    ...econModel.secondaryEstimates,
+  ];
+
+  return (
+    <section className="space-y-4 border border-[var(--line)] bg-[var(--paper)] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
+            Econometric Results, Diagnostics & Specification Forks
+          </p>
+          <h3 className="mt-0.5 font-[family-name:var(--font-display)] text-lg text-[var(--ink)]">
+            Pre-Registered Estimation Table ({headline.spec.outcomeSeriesId})
+          </h3>
+        </div>
+        <button
+          type="button"
+          className="node-action text-[var(--copper)]"
+          onClick={() => setShowMethodsDrawer((prev) => !prev)}
+        >
+          {showMethodsDrawer ? "Hide Methods Drawer" : "? Methods & Assumptions Drawer"}
+        </button>
+      </div>
+
+      {showMethodsDrawer ? <MethodsCatalogDrawer /> : null}
+
+      {/* 1. Coefficient Table */}
+      <div className="overflow-x-auto border border-[var(--line)]">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-[var(--line)] bg-[var(--bg)]/70 text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
+              <th className="px-3 py-2">Estimator & Honesty Label</th>
+              <th className="px-3 py-2">Series & Window</th>
+              <th className="px-3 py-2">Point Est. (β)</th>
+              <th className="px-3 py-2">Std. Error</th>
+              <th className="px-3 py-2">95% CI</th>
+              <th className="px-3 py-2">p-value</th>
+              <th className="px-3 py-2">N & Lock Hash</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--line)] font-mono text-[11px]">
+            {allEstimates.map((est) => (
+              <tr key={est.id} className="bg-[var(--bg)]/35">
+                <td className="px-3 py-2 font-sans">
+                  <span className="block font-medium text-[var(--ink)]">
+                    {est.methodLabel}
+                  </span>
+                  <span className="text-[10px] text-[var(--copper)]">
+                    {est.honestyLabel} · {est.seMethod}
+                  </span>
+                </td>
+                <td className="px-3 py-2">
+                  <span className="block text-[var(--ink)]">
+                    {est.spec.outcomeSeriesId}
+                  </span>
+                  <span className="text-[10px] text-[var(--muted)]">
+                    {est.sampleWindow.start} → {est.sampleWindow.end}
+                  </span>
+                </td>
+                <td className="px-3 py-2 font-semibold text-[#8fbf9a]">
+                  {est.pointEstimate >= 0 ? `+${est.pointEstimate}` : est.pointEstimate}
+                </td>
+                <td className="px-3 py-2 text-[var(--ink)]">{est.standardError}</td>
+                <td className="px-3 py-2 text-[var(--muted)]">
+                  [{est.ciLower}, {est.ciUpper}]
+                </td>
+                <td className="px-3 py-2 text-[var(--ink)]">{est.pValue}</td>
+                <td className="px-3 py-2 text-[10px] text-[var(--muted)]">
+                  N={est.sampleSize} · #{est.spec.preRegistration.lockHash.slice(0, 8)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 2. Diagnostics Checklist (Pass / Warn / Fail) */}
+      <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+        {headline.diagnostics.checklist.map((item) => (
+          <div
+            key={item.name}
+            className="border border-[var(--line)] bg-[var(--bg)]/50 p-2.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--ink)]">
+                {item.name}
+              </span>
+              <span
+                className={`px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
+                  item.status === "pass"
+                    ? "bg-[#8fbf9a]/20 text-[#8fbf9a]"
+                    : item.status === "warn"
+                      ? "bg-[#d4b483]/20 text-[#d4b483]"
+                      : "bg-[#d46a6a]/20 text-[#d46a6a]"
+                }`}
+              >
+                {item.status.toUpperCase()}
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-[var(--muted)]">
+              {item.summary}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* 3. Skeptic "What Would Change My Mind" Interactive Fork Comparison */}
+      {forks.length > 0 ? (
+        <div className="border border-[var(--line)] bg-[var(--bg)]/45 p-3.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+            Skeptic Red-Team · “What Would Change My Mind” Live Specification Forks
+          </p>
+          <p className="mt-0.5 text-xs text-[var(--muted)]">
+            Click any falsification fork below to re-estimate live and compare side-by-side against the pre-registered baseline.
+          </p>
+          <div className="mt-2.5 flex flex-wrap gap-2">
+            {forks.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() =>
+                  setActiveForkId((prev) => (prev === f.id ? null : f.id))
+                }
+                className={`graph-filter-pill ${
+                  activeForkId === f.id ? "is-active" : ""
+                }`}
+              >
+                Fork: {f.label}
+              </button>
+            ))}
+          </div>
+
+          {forkComparison ? (
+            <div className="mt-3 grid gap-3 border-t border-[var(--line)] pt-3 sm:grid-cols-2">
+              <div className="border border-[var(--line)] bg-[var(--paper)] p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                  Pre-Registered Baseline ({forkComparison.baselineEstimate.methodLabel})
+                </p>
+                <p className="mt-1 font-mono text-sm font-semibold text-[var(--ink)]">
+                  β = {forkComparison.baselineEstimate.pointEstimate} (95% CI [
+                  {forkComparison.baselineEstimate.ciLower},{" "}
+                  {forkComparison.baselineEstimate.ciUpper}], p ={" "}
+                  {forkComparison.baselineEstimate.pValue}, N ={" "}
+                  {forkComparison.baselineEstimate.sampleSize})
+                </p>
+                <p className="mt-1 font-mono text-[10px] text-[var(--muted)]">
+                  Lock Hash: #{forkComparison.baselineEstimate.spec.preRegistration.lockHash.slice(0, 12)}
+                </p>
+              </div>
+              <div className="border border-[var(--copper)]/45 bg-[var(--paper)] p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--copper)]">
+                  Forked Specification ({forkComparison.fork.label})
+                </p>
+                <p className="mt-1 font-mono text-sm font-semibold text-[#8fbf9a]">
+                  β = {forkComparison.forkEstimate.pointEstimate} (95% CI [
+                  {forkComparison.forkEstimate.ciLower},{" "}
+                  {forkComparison.forkEstimate.ciUpper}], p ={" "}
+                  {forkComparison.forkEstimate.pValue}, N ={" "}
+                  {forkComparison.forkEstimate.sampleSize})
+                </p>
+                <p className="mt-1 text-[11px] text-[var(--ink)]">
+                  {forkComparison.conclusionSummary}
+                </p>
+                <p className="mt-0.5 font-mono text-[10px] text-[var(--muted)]">
+                  Fork Hash: #{forkComparison.forkEstimate.spec.preRegistration.lockHash.slice(0, 12)} (parent #{forkComparison.forkEstimate.spec.preRegistration.forkParentHash?.slice(0, 8)})
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+export function MethodsCatalogDrawer() {
+  const entries = Object.values(METHOD_CATALOG);
+  return (
+    <div className="grid gap-2.5 border border-[var(--line)] bg-[#0e1015] p-3.5 sm:grid-cols-2 lg:grid-cols-3">
+      {entries.map((m) => (
+        <div key={m.id} className="border border-[var(--line)] bg-[var(--paper)] p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--copper)]">
+              {m.honestyLabel}
+            </span>
+            <span className="font-mono text-[9.5px] text-[var(--muted)]">
+              min N={m.minObservations}
+            </span>
+          </div>
+          <h4 className="mt-1 font-[family-name:var(--font-display)] text-sm text-[var(--ink)]">
+            {m.label}
+          </h4>
+          <p className="mt-1 text-[11px] leading-snug text-[var(--muted)]">
+            {m.plainLanguageExplanation}
+          </p>
+          <p className="mt-1.5 text-[10px] text-[var(--ink)]/85">
+            <strong>Assumptions:</strong> {m.assumptions.join("; ")}
+          </p>
+          <p className="mt-1 text-[10px] text-[#d4a08c]">
+            <strong>Threats:</strong> {m.threatsToValidity.join("; ")}
+          </p>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -525,7 +983,7 @@ export function FredSeriesChartCard({ series }: { series: ExtractedSeries }) {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
-            FRED Empirical Series · {series.seriesId}
+            Live Empirical Series · {series.seriesId}
           </p>
           <h3 className="mt-0.5 font-[family-name:var(--font-display)] text-base leading-snug text-[var(--ink)]">
             {series.title}
@@ -539,7 +997,7 @@ export function FredSeriesChartCard({ series }: { series: ExtractedSeries }) {
             {last.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
           </p>
           <p className="font-mono text-[10px] text-[var(--muted)]">
-            {delta >= 0 ? `+${pct}%` : `${pct}%`} ({first.date} → {last.date})
+            {delta >= 0 ? `+${pct}%` : `${pct}%`} ({first.date} → {last.date}, n={pts.length})
           </p>
         </div>
       </div>
@@ -548,7 +1006,7 @@ export function FredSeriesChartCard({ series }: { series: ExtractedSeries }) {
         viewBox={`0 0 ${w} ${h}`}
         className="mt-3 h-32 w-full"
         role="img"
-        aria-label={`Time-series chart for ${series.title}`}
+        aria-label={`Time-series chart for ${series.title} (${series.seriesId})`}
       >
         <defs>
           <linearGradient id={`grad-${series.key}`} x1="0" y1="0" x2="0" y2="1">
@@ -594,8 +1052,13 @@ export function FredSeriesChartCard({ series }: { series: ExtractedSeries }) {
         </text>
       </svg>
 
-      <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--line)] pt-2 text-[11px] text-[var(--muted)]">
-        <span className="truncate">Supports: {series.nodeTitle}</span>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-2 text-[10.5px] text-[var(--muted)]">
+        <span className="truncate">
+          Vintage: {series.vintage ?? series.provenance?.vintageDate ?? "latest"} ·{" "}
+          {series.resultHash
+            ? `SHA-256: ${series.resultHash.slice(0, 10)}`
+            : `Node: ${series.nodeTitle}`}
+        </span>
         {series.url ? (
           <a
             href={series.url}
@@ -603,7 +1066,7 @@ export function FredSeriesChartCard({ series }: { series: ExtractedSeries }) {
             rel="noreferrer"
             className="shrink-0 text-[var(--copper)] hover:underline"
           >
-            St. Louis Fed ↗
+            Source ↗
           </a>
         ) : null}
       </div>
@@ -625,7 +1088,7 @@ export function SpineCoverageChart({ nodes }: { nodes: DigressionNode[] }) {
             Policy Spine & Evidence Coverage
           </p>
           <h3 className="mt-0.5 font-[family-name:var(--font-display)] text-base text-[var(--ink)]">
-            Empirical Graduation by Argument Stage
+            Econometric Standing by Argument Stage
           </h3>
         </div>
         <div className="text-right">
@@ -633,7 +1096,7 @@ export function SpineCoverageChart({ nodes }: { nodes: DigressionNode[] }) {
             {supportPct}%
           </p>
           <p className="font-mono text-[10px] text-[var(--muted)]">
-            {totalSupported}/{nodes.length} nodes verified
+            {totalSupported}/{nodes.length} nodes supported
           </p>
         </div>
       </div>
@@ -641,10 +1104,19 @@ export function SpineCoverageChart({ nodes }: { nodes: DigressionNode[] }) {
       <div className="mt-3 space-y-2.5">
         {lanes.map((lane) => {
           const laneNodes = nodes.filter((n) => nodeLane(n.kind) === lane);
-          const supported = laneNodes.filter((n) => n.status === "supported").length;
-          const contested = laneNodes.filter((n) => n.status === "contested").length;
+          const supported = laneNodes.filter(
+            (n) => n.status === "supported" || n.status === "data_attached" || n.status === "tested",
+          ).length;
+          const contested = laneNodes.filter(
+            (n) =>
+              n.status === "contested" ||
+              n.status === "inconclusive" ||
+              n.status === "contradicted" ||
+              n.status === "unverifiable",
+          ).length;
           const proposed = laneNodes.filter(
-            (n) => n.status !== "supported" && n.status !== "contested",
+            (n) =>
+              n.status === "proposed",
           ).length;
           const total = Math.max(1, laneNodes.length);
 
@@ -652,10 +1124,10 @@ export function SpineCoverageChart({ nodes }: { nodes: DigressionNode[] }) {
             <div key={lane} className="space-y-1">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="uppercase tracking-[0.1em] text-[var(--ink)]">
-                  {lane === "digression" ? "06 · Digression Branches" : LANE_LABEL[lane]}
+                  {lane === "digression" ? "06 · Digression & Forks" : LANE_LABEL[lane]}
                 </span>
                 <span className="font-mono text-[10px] text-[var(--muted)]">
-                  {supported} verified · {contested} needs proof · {proposed} hypothesis
+                  {supported} data/supported · {contested} flagged/inconclusive · {proposed} proposed
                 </span>
               </div>
               <div className="flex h-2.5 w-full overflow-hidden bg-[var(--bg)]">
@@ -663,21 +1135,18 @@ export function SpineCoverageChart({ nodes }: { nodes: DigressionNode[] }) {
                   <div
                     style={{ width: `${(supported / total) * 100}%` }}
                     className="bg-[#8fbf9a]"
-                    title={`${supported} verified`}
                   />
                 ) : null}
                 {contested > 0 ? (
                   <div
                     style={{ width: `${(contested / total) * 100}%` }}
                     className="bg-[#d4a08c]"
-                    title={`${contested} needs proof`}
                   />
                 ) : null}
                 {proposed > 0 ? (
                   <div
                     style={{ width: `${(proposed / total) * 100}%` }}
                     className="bg-[#d4b483]/50"
-                    title={`${proposed} hypothesis`}
                   />
                 ) : null}
               </div>
@@ -704,32 +1173,38 @@ export function IncidenceTradeoffMatrix({
   return (
     <section className="mt-5">
       <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--copper)]">
-        Stage-by-Stage Node Analysis & Provenance Cards
+        Stage-by-Stage Node Analysis, Honesty Labels & Provenance Cards
       </p>
       <div className="mt-2.5 grid gap-3 md:grid-cols-2">
         {keyNodes.map((node) => {
           const kindInfo = NODE_KIND_TAXONOMY[node.kind];
-          const statusInfo = NODE_STATUS_TAXONOMY[node.status];
+          const statusInfo = NODE_STATUS_TAXONOMY[node.status] ?? NODE_STATUS_TAXONOMY.proposed;
           const fullAnalysis = analyses?.[node.id]?.body;
           return (
             <div
               key={node.id}
               className="border border-[var(--line)] bg-[var(--paper)] p-3.5"
             >
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span
                   className="text-[10px] font-semibold uppercase tracking-[0.12em]"
                   style={{ color: kindInfo.color }}
                 >
                   {kindInfo.stage} · {kindInfo.label}
                 </span>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {node.honestyLabel ? (
+                    <span className="border border-[var(--line)] bg-[var(--bg)]/60 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.08em] text-[var(--copper)]">
+                      {node.honestyLabel}
+                    </span>
+                  ) : null}
                   <span
                     className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]"
                     style={{
                       backgroundColor: statusInfo.bgColor,
                       color: statusInfo.color,
                     }}
+                    title={node.statusReason ?? statusInfo.meaning}
                   >
                     {statusInfo.shortLabel}
                   </span>
@@ -752,10 +1227,15 @@ export function IncidenceTradeoffMatrix({
               <p className="mt-1 text-xs leading-relaxed text-[var(--ink)]/90">
                 {node.body}
               </p>
+              {node.statusReason ? (
+                <p className="mt-1.5 font-mono text-[10px] text-[var(--muted)]">
+                  Rule evaluation: {node.statusReason}
+                </p>
+              ) : null}
               {fullAnalysis ? (
                 <details className="mt-2 border-t border-[var(--line)] pt-2">
                   <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--copper)]">
-                    Read 5-Section Economic Analysis (Mechanism, Incidence, Identification, Sign Flip)
+                    Read 5-Section Economic Analysis (Mechanism, Identification, Incidence, Sign Flip)
                   </summary>
                   <p className="mt-1.5 whitespace-pre-wrap text-[11.5px] leading-relaxed text-[var(--muted)]">
                     {fullAnalysis.replace(/^##\s+/gm, "▸ ")}
@@ -878,7 +1358,7 @@ export function VerifiedBibliographyTable({
             Full Sourcing & Provenance Register
           </p>
           <h3 className="mt-0.5 font-[family-name:var(--font-display)] text-lg text-[var(--ink)]">
-            Verified MCP Spans, Official Series & Literature ({entries.length})
+            Verified MCP Spans, Live Series & Literature ({entries.length})
           </h3>
         </div>
       </div>
@@ -891,7 +1371,7 @@ export function VerifiedBibliographyTable({
               <th className="px-3 py-2.5">Type</th>
               <th className="px-3 py-2.5">Source & Citation</th>
               <th className="px-3 py-2.5">Backed Nodes</th>
-              <th className="px-3 py-2.5">Span Hash / Note</th>
+              <th className="px-3 py-2.5">Span / SHA-256</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--line)]">
