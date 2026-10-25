@@ -187,6 +187,21 @@ export async function getRun(
     const events = await listEvents(userId, runId);
     snapshot.events = events;
 
+    for (const ev of events) {
+      if (ev.type === "scope.updated" && ev.payload) {
+        if (Array.isArray(ev.payload.estimates)) {
+          snapshot.estimates = ev.payload.estimates as RunSnapshot["estimates"];
+        }
+        if (Array.isArray(ev.payload.robustness)) {
+          snapshot.robustness = ev.payload.robustness as RunSnapshot["robustness"];
+        }
+        if (ev.payload.preRegistrationLock) {
+          snapshot.preRegistrationLock =
+            ev.payload.preRegistrationLock as RunSnapshot["preRegistrationLock"];
+        }
+      }
+    }
+
     // Surface any scope-change invalidations since the last crew turn started
     let lastTurnStartSeq = -1;
     for (const ev of events) {

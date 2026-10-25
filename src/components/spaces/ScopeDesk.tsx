@@ -27,6 +27,8 @@ const FIELDS: Array<{ key: keyof ScopeContract; label: string; rows?: number }> 
   { key: "target", label: "Target", rows: 4 },
   { key: "identificationStrategy", label: "Identification", rows: 5 },
   { key: "horizon", label: "Horizon", rows: 3 },
+  { key: "policyDate", label: "Policy enactment / effective date (YYYY-MM-DD)", rows: 1 },
+  { key: "policyDateSource", label: "Policy date statutory / documentary source", rows: 2 },
   { key: "jurisdiction", label: "Jurisdiction", rows: 3 },
   { key: "baseline", label: "Baseline", rows: 4 },
   { key: "distributionalCut", label: "Distributional cut", rows: 3 },
@@ -40,6 +42,8 @@ function emptyScope(runId: string): ScopeContract {
     question: "",
     jurisdiction: "",
     horizon: "",
+    policyDate: null,
+    policyDateSource: "",
     objective: "",
     instrument: "",
     target: "",
@@ -152,8 +156,14 @@ export function ScopeDesk() {
         >
           <div className="grid gap-4">
             {FIELDS.map((field) => {
-              const value = draft[field.key];
-              if (typeof value !== "string") return null;
+              const rawVal = draft[field.key];
+              const value =
+                typeof rawVal === "string"
+                  ? rawVal
+                  : field.key === "policyDate" || field.key === "policyDateSource"
+                    ? ""
+                    : null;
+              if (value === null) return null;
               return (
                 <label key={field.key} className="block">
                   <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--muted)]">
@@ -165,7 +175,14 @@ export function ScopeDesk() {
                     value={value}
                     onChange={(event) => {
                       setSaved(false);
-                      setDraft({ ...draft, [field.key]: event.target.value });
+                      const nextVal = event.target.value;
+                      setDraft({
+                        ...draft,
+                        [field.key]:
+                          field.key === "policyDate"
+                            ? nextVal.trim() || null
+                            : nextVal,
+                      });
                     }}
                   />
                 </label>

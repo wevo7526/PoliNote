@@ -1,4 +1,9 @@
 import { layoutNodes } from "@/lib/ai/layout";
+import type {
+  EconometricEstimate,
+  PreRegistrationLock,
+  RobustnessBundle,
+} from "@/lib/economics/schemas";
 import { redactSecrets } from "@/lib/mcp/http";
 import type { RunSnapshot } from "@/lib/platform-types";
 import type { ThreadItem } from "@/components/studio/thread-types";
@@ -32,6 +37,12 @@ export type CrewStreamEvent =
       spanId?: string;
     }
   | { type: "draft"; brief: string; appendix: string }
+  | {
+      type: "estimates";
+      estimates: EconometricEstimate[];
+      robustness: RobustnessBundle[];
+      preRegistrationLock: PreRegistrationLock | null;
+    }
   | { type: "flag"; nodeId: string; message: string };
 
 export function workingStatus(text: string): CrewStreamEvent {
@@ -199,6 +210,13 @@ export function applyCrewEvent(
           appendix: event.appendix,
           updatedAt: new Date().toISOString(),
         },
+      };
+    case "estimates":
+      return {
+        ...snapshot,
+        estimates: event.estimates,
+        robustness: event.robustness,
+        preRegistrationLock: event.preRegistrationLock,
       };
     case "flag": {
       const nodes = snapshot.nodes.map((node) =>

@@ -8,18 +8,25 @@ import {
   selectAndValidateLiveSeries,
   type SeriesSelectionReport,
 } from "@/lib/data/selector";
-import type { DataProvenance, FetchedSeriesBundle, RawSnapshotRecord } from "@/lib/data/types";
+import type {
+  DataProvenance,
+  FetchedSeriesBundle,
+  RawSnapshotRecord,
+} from "@/lib/data/types";
 import {
+  createPreRegistrationLock,
   executeEconometricEstimate,
   runAutomaticRobustnessSuite,
 } from "@/lib/economics/estimators";
+import { maybeEnrichWithPythonService } from "@/lib/economics/python-bridge";
 import type {
   EconometricEstimate,
   EconometricMethodId,
+  PreRegistrationLock,
   RobustnessBundle,
 } from "@/lib/economics/schemas";
 import { serverForTool } from "@/lib/mcp/catalog";
-import { cleanFredSearchText, type FredSeries } from "@/lib/mcp/fred";
+import { type FredSeries } from "@/lib/mcp/fred";
 import { redactSecrets } from "@/lib/mcp/http";
 import type { ExtractedLiteratureEstimate } from "@/lib/mcp/openalex";
 import { ensureMcpTools } from "@/lib/mcp/register";
@@ -52,6 +59,7 @@ type ScopeBits = {
   jurisdiction: string;
   distributionalCut: string;
   horizon?: string;
+  policyDate?: string | null;
   allowedMethods: AllowedMethod[];
 };
 
@@ -83,13 +91,14 @@ export function deriveQueries(question: string, scope: ScopeBits): SpecialistQue
   const win = deriveObservationWindow({
     question: combined,
     horizon: scope.horizon,
+    policyDate: scope.policyDate,
   });
   return {
-    fred: buildProviderSearchQuery(combined),
+    fred: buildProviderSearchQuery(scope.target || combined),
     lit: seedQuery(question, "empirical economics identification elasticity", 80),
     policy: seedQuery(`${question} ${scope.jurisdiction.slice(0, 60)}`, "statute regulation", 80),
-    macro: buildProviderSearchQuery(`${scope.target} ${scope.distributionalCut}`),
-    policyDate: win.policyDate,
+    macro: buildProviderSearchQuery(`${scope.instrument} ${scope.distributionalCut}`),
+    policyDate: scope.policyDate ?? win.policyDate,
     observationStart: win.observationStart,
     observationEnd: win.observationEnd,
   };
@@ -273,7 +282,7 @@ function makeAnalysis(
       : "";
 
   const estSummary = estimate
-    ? `Estimated via ${estimate.methodLabel} [${estimate.honestyLabel}]: β = ${estimate.pointEstimate} (SE = ${estimate.standardError}, 95% CI [${estimate.ciLower}, ${estimate.ciUpper}], p = ${estimate.pValue}, N = ${estimate.sampleSize}, ${estimate.seMethod}). Pre-registration lock hash: ${estimate.spec.preRegistration.lockHash.slice(0, 12)}.`
+    ? `Estimated via ${estimate.methodLabel} [${estimate.honestyLabel}]: β = ${estimate.pointEstimate} (SE = ${estimate.standardError}, 95% CI [${estimate.ciLower}, ${estimate.ciUpper}], p = ${estimate.pValue}, N = ${estimate.sampleSize}, ${estimate.seMethod}). Pre-registration lock hash: ${estimate.spec.preRegistration.lockHash.slice(0, 12)} (locked at ${estimate.spec.preRegistration.lockedAt}).`
     : "No econometric estimate computed on this node.";
 
   const robSummary = robustness
@@ -345,7 +354,7 @@ export async function* streamInstrumentParser(input: {
 }): AsyncGenerator<CrewStreamEvent, SpecialistQueries> {
   const queries = deriveQueries(input.question, input.scope);
   yield workingStatus(
-    `Data Scout locking live queries & window (${queries.observationStart} → ${queries.observationEnd})…`,
+    `Step 2/7 · Data Scout locking live queries & window (${queries.observationStart} → ${queries.observationEnd})…`,
   );
   const memo = [
     `question: ${input.question}`,
@@ -367,7 +376,7 @@ export async function* streamInstrumentParser(input: {
       id: crypto.randomUUID(),
       kind: "narration",
       agent: "data_scout",
-      text: `Pre-registered empirical search protocol: observation window ${queries.observationStart} to ${queries.observationEnd}${queries.policyDate ? ` (policy date ${queries.policyDate})` : ""}, primary series query “${queries.fred}”, literature query “${queries.lit}”, and statutory query “${queries.policy}”.`,
+      text: `Pre-registered empirical search protocol: observation window ${queries.observationStart} to ${queries.observationEnd}${queries.policyDate ? ` (policy date ${queries.policyDate})` : " (no policy date specified)"}, primary series query “${queries.fred}”, literature query “${queries.lit}”, and statutory query “${queries.policy}”.`,
     },
   };
   return queries;
@@ -380,6 +389,7 @@ export type McpSpecialistsResult = {
   snapshots: RawSnapshotRecord[];
   estimates: EconometricEstimate[];
   robustness: RobustnessBundle[];
+  preRegistrationLock: PreRegistrationLock | null;
   literatureEstimates: ExtractedLiteratureEstimate[];
   selectionReport: SeriesSelectionReport | null;
   dataErrors: string[];
@@ -406,24 +416,28 @@ export async function* streamMcpSpecialists(input: {
   const literatureEstimates: ExtractedLiteratureEstimate[] = [];
   const dataErrors: string[] = [];
 
-  // 1. Live Series Selection & Metadata Validation via Data Scout
+  const resolvedPolicyDate =
+    input.contract.policyDate ?? input.queries.policyDate ?? null;
+
+  // 1. Live Series Selection & Metadata Validation via Data Scout (metadata only — zero observations fetched yet)
   let selectionReport: SeriesSelectionReport | null = null;
   if (allow["econ-series"]) {
-    yield workingStatus("Data Scout validating live candidate series across providers…");
     try {
       selectionReport = await selectAndValidateLiveSeries({
-        question: `${input.contract.question} ${input.scope.instrument} ${input.scope.target}`,
+        question: `${input.contract.target} ${input.contract.question}`,
         horizon: input.scope.horizon,
-        policyDate: input.queries.policyDate ?? undefined,
+        policyDate: resolvedPolicyDate,
         extraQueries: [input.queries.fred, input.queries.macro],
-        maxSelected: 3,
+        maxSelected: 4,
       });
       for (const err of selectionReport.providerErrors) {
         dataErrors.push(err.message);
       }
     } catch (error) {
       dataErrors.push(
-        error instanceof Error ? error.message : "Data unavailable: live series selector failed",
+        error instanceof Error
+          ? error.message
+          : "Data unavailable: live series selector failed",
       );
     }
   }
@@ -457,16 +471,16 @@ export async function* streamMcpSpecialists(input: {
     );
   };
 
-  if (allow["econ-series"] && (!selectionReport || selectionReport.selected.length === 0)) {
-    yield workingStatus("Data Scout querying FRED search endpoint…");
+  if (
+    allow["econ-series"] &&
+    (!selectionReport || selectionReport.selected.length === 0)
+  ) {
     queue("data_scout", "econ.search_series", { query: input.queries.fred });
   }
   if (allow.literature) {
-    yield workingStatus("Literature Analyst searching OpenAlex for quote-backed estimates…");
     queue("literature_analyst", "lit.search", { query: input.queries.lit });
   }
   if (allow["policy-docs"]) {
-    yield workingStatus("Checking official statutory & congressional records…");
     queue("legal", "policy.search", { query: input.queries.policy });
   }
 
@@ -479,10 +493,10 @@ export async function* streamMcpSpecialists(input: {
     }
   }
 
-  // Determine candidate series IDs from Data Scout validation report or live search
+  // Determine candidate series IDs (outcome + comparison/donor pool up to 3 series)
   const selectedIds: Array<{ id: string; title?: string; units?: string }> = [];
   if (selectionReport && selectionReport.selected.length > 0) {
-    for (const cand of selectionReport.selected.slice(0, 2)) {
+    for (const cand of selectionReport.selected.slice(0, 3)) {
       selectedIds.push({
         id: cand.metadata.id,
         title: cand.metadata.title,
@@ -497,22 +511,39 @@ export async function* streamMcpSpecialists(input: {
       Array.isArray((seriesSearch.data as { series?: FredSeries[] }).series)
         ? (seriesSearch.data as { series: FredSeries[] }).series
         : [];
-    for (const s of list.slice(0, 2)) {
+    for (const s of list.slice(0, 3)) {
       if (s.id) selectedIds.push({ id: s.id, title: s.title, units: s.units });
     }
   }
 
-  // Pull live observations for the top validated series (primary outcome + optional control)
+  // 2. PRE-REGISTRATION LOCK: Lock and hash the scope and specification BEFORE any observations are fetched!
+  const chosenMethod: EconometricMethodId =
+    input.preferredMethod ?? "event_study";
+  let preRegistrationLock: PreRegistrationLock | null = null;
+  if (selectedIds.length > 0) {
+    preRegistrationLock = createPreRegistrationLock({
+      scopeId: input.contract.id,
+      outcomeSeriesId: selectedIds[0]!.id,
+      comparisonSeriesIds: selectedIds.slice(1).map((s) => s.id),
+      selectionRulesSummary:
+        "Quality & pre/post window coverage validation on live provider metadata prior to observation pull",
+      transform: "lin",
+      method: chosenMethod,
+      windowStart: input.queries.observationStart,
+      windowEnd: input.queries.observationEnd,
+      policyDate: resolvedPolicyDate,
+      hacLags: 4,
+    });
+  }
+
+  // 3. Now pull live observations for the pre-registered series (outcome + comparison/donor candidates)
   for (const [idx, seriesLead] of selectedIds.entries()) {
-    yield workingStatus(
-      `Fetching live observations for ${seriesLead.id} (${input.queries.observationStart} → ${input.queries.observationEnd})…`,
-    );
     const obs = await invoke("data_scout", "econ.get_observations", {
       seriesId: seriesLead.id,
       title: seriesLead.title,
       units: seriesLead.units,
       question: input.contract.question,
-      policyDate: input.queries.policyDate,
+      policyDate: resolvedPolicyDate,
       observationStart: input.queries.observationStart,
       observationEnd: input.queries.observationEnd,
     });
@@ -569,7 +600,7 @@ export async function* streamMcpSpecialists(input: {
       });
     }
 
-    const nodeKey = idx === 0 ? "ev_fred" : "ev_macro";
+    const nodeKey = idx === 0 ? "ev_fred" : idx === 1 ? "ev_macro" : `ev_donor_${idx}`;
     const existing = findByKey(nodes, input.runId, nodeKey);
     let evNode =
       existing ??
@@ -580,7 +611,7 @@ export async function* streamMcpSpecialists(input: {
         "evidence",
         seriesLead.title
           ? `${seriesLead.id}: ${seriesLead.title.slice(0, 44)}`
-          : `FRED ${seriesLead.id}`,
+          : `Series ${seriesLead.id}`,
         obs.span.citation,
         { honestyLabel: "Descriptive" },
       );
@@ -612,27 +643,28 @@ export async function* streamMcpSpecialists(input: {
     }
   }
 
-  // 2. Econometrician: Run real estimation + automatic robustness on live bundles
-  // and set Claim status ONLY via deterministic code rule (`evaluateClaimStatusFromEstimate`).
+  // 4. Econometrician: Run real estimation + automatic robustness on live bundles
   const claimTarget = firstOfKind(nodes, "claim");
-  if (bundles.length > 0) {
+  if (bundles.length > 0 && resolvedPolicyDate) {
     const primaryBundle = bundles[0]!;
-    const controlBundles = bundles.slice(1);
-    const chosenMethod: EconometricMethodId =
-      input.preferredMethod ?? "event_study";
-
-    yield workingStatus(
-      `Econometrician running ${chosenMethod} & automatic specification curve on ${primaryBundle.metadata.id}…`,
-    );
+    const comparisonBundles = bundles.slice(1);
 
     try {
-      const headlineEst = executeEconometricEstimate({
+      let headlineEst = executeEconometricEstimate({
         method: chosenMethod,
         outcome: primaryBundle,
-        policyDate: input.queries.policyDate,
+        policyDate: resolvedPolicyDate,
         scopeId: input.contract.id,
-        controls: controlBundles,
+        donors: comparisonBundles,
+        controls: comparisonBundles.slice(0, 1),
+        preRegistrationLock: preRegistrationLock ?? undefined,
       });
+
+      // If PYTHON_ECONOMETRICS_URL is configured and reachable, enrich with statsmodels output
+      headlineEst = await maybeEnrichWithPythonService(
+        headlineEst,
+        primaryBundle.observations,
+      );
       estimates.push(headlineEst);
 
       const lpEst = executeEconometricEstimate({
@@ -640,16 +672,29 @@ export async function* streamMcpSpecialists(input: {
         outcome: primaryBundle,
         policyDate: headlineEst.spec.policyDate,
         scopeId: input.contract.id,
+        preRegistrationLock: headlineEst.spec.preRegistration,
       });
       estimates.push(lpEst);
+
+      yield workingStatus(
+        `Step 5/7 · Running automatic specification curve & robustness suite on ${primaryBundle.metadata.id}…`,
+      );
 
       const robBundle = runAutomaticRobustnessSuite({
         headline: headlineEst,
         outcome: primaryBundle,
-        controls: controlBundles,
+        donors: comparisonBundles,
+        controls: comparisonBundles.slice(0, 1),
         scopeId: input.contract.id,
       });
       robustnessList.push(robBundle);
+
+      yield {
+        type: "estimates",
+        estimates,
+        robustness: robustnessList,
+        preRegistrationLock: headlineEst.spec.preRegistration,
+      };
 
       yield {
         type: "narration",
@@ -657,7 +702,7 @@ export async function* streamMcpSpecialists(input: {
           id: crypto.randomUUID(),
           kind: "narration",
           agent: "econometrician",
-          text: `Executed pre-registered ${headlineEst.methodLabel} on ${primaryBundle.metadata.id} (lock=${headlineEst.spec.preRegistration.lockHash.slice(0, 10)}, N=${headlineEst.sampleSize}, window ${headlineEst.sampleWindow.start} to ${headlineEst.sampleWindow.end}): point estimate β = ${headlineEst.pointEstimate} (SE = ${headlineEst.standardError}, 95% CI [${headlineEst.ciLower}, ${headlineEst.ciUpper}], p = ${headlineEst.pValue}, ${headlineEst.seMethod}). ${robBundle.summary}`,
+          text: `Executed pre-registered ${headlineEst.methodLabel} [${headlineEst.honestyLabel}] on ${primaryBundle.metadata.id} (lock=${headlineEst.spec.preRegistration.lockHash.slice(0, 10)} locked at ${headlineEst.spec.preRegistration.lockedAt}, N=${headlineEst.sampleSize}, window ${headlineEst.sampleWindow.start} to ${headlineEst.sampleWindow.end}): point estimate β = ${headlineEst.pointEstimate} (SE = ${headlineEst.standardError}, 95% CI [${headlineEst.ciLower}, ${headlineEst.ciUpper}], p = ${headlineEst.pValue}, ${headlineEst.seMethod}).${headlineEst.relabelReason ? ` ${headlineEst.relabelReason}` : ""} ${robBundle.summary}`,
         },
       };
 
@@ -692,7 +737,12 @@ export async function* streamMcpSpecialists(input: {
         yield { type: "node", node: updatedClaim };
         yield {
           type: "analysis",
-          analysis: makeAnalysis(updatedClaim, primarySpan ?? null, headlineEst, robBundle),
+          analysis: makeAnalysis(
+            updatedClaim,
+            primarySpan ?? null,
+            headlineEst,
+            robBundle,
+          ),
         };
       }
     } catch (error) {
@@ -701,10 +751,11 @@ export async function* streamMcpSpecialists(input: {
       dataErrors.push(errMsg);
     }
   } else if (claimTarget) {
-    // No live data available -> mark claim unverifiable visibly, never substitute fake data
-    const reason =
-      dataErrors[0] ??
-      "Data unavailable: FRED_API_KEY missing or no live series matched query.";
+    const reason = !resolvedPolicyDate
+      ? "Estimation skipped: no defensible policy enactment date was specified in the Scope Contract. Provide a policy date (YYYY-MM-DD) and cited source on the Scope desk."
+      : (dataErrors[0] ??
+        "Data unavailable: FRED_API_KEY missing or no live series matched query.");
+    dataErrors.push(reason);
     const unverifiableClaim: DigressionNode = {
       ...claimTarget,
       status: "unverifiable",
@@ -722,7 +773,7 @@ export async function* streamMcpSpecialists(input: {
     };
   }
 
-  // 3. Literature Analyst: attach OpenAlex works and extracted quote-span estimates
+  // Literature Analyst: attach OpenAlex works and extracted quote-span estimates
   const lit = settled.find((item) => item.tool === "lit.search");
   if (lit?.span) {
     const works =
@@ -757,7 +808,6 @@ export async function* streamMcpSpecialists(input: {
           yield { type: "node", node };
           yield { type: "analysis", analysis: makeAnalysis(node, lit.span) };
 
-          // Link literature evidence to Mechanism node (without auto-marking Mechanism as supported!)
           const mechTarget =
             firstOfKind(nodes, "mechanism") ?? firstOfKind(nodes, "claim");
           if (mechTarget && mechTarget.id !== node.id) {
@@ -771,7 +821,7 @@ export async function* streamMcpSpecialists(input: {
     }
   }
 
-  // 4. Policy Docs
+  // Policy Docs
   const policy = settled.find((item) => item.tool === "policy.search");
   if (policy?.span) {
     const docs =
@@ -844,6 +894,7 @@ export async function* streamMcpSpecialists(input: {
     snapshots,
     estimates,
     robustness: robustnessList,
+    preRegistrationLock,
     literatureEstimates,
     selectionReport,
     dataErrors,

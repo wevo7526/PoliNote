@@ -16,16 +16,22 @@ export type AllowedMethod = z.infer<typeof AllowedMethodSchema>;
 /**
  * Scope Contract — filled before generation. Blocks runs until instrument,
  * target, identification strategy, and horizon are present.
+ * `policyDate` (YYYY-MM-DD) and `policyDateSource` record the explicit enactment/effective
+ * date and its statutory or documentary source.
  */
 export const ScopeContractSchema = z.object({
   id: z.string().min(1),
   question: z.string().min(1),
   jurisdiction: z.string().min(1),
   horizon: z.string().min(1),
+  /** Explicit policy enactment / effective date (YYYY-MM-DD), or null if none exists. */
+  policyDate: z.string().nullable().optional(),
+  /** Cited statutory, congressional, or official source for policyDate. */
+  policyDateSource: z.string().optional(),
   objective: z.string().min(1),
-  /** Policy instrument under analysis (e.g. "25% ad valorem EV tariff"). */
+  /** Policy instrument under analysis. */
   instrument: z.string().min(1),
-  /** Outcome / population target (e.g. "US EV retail prices + employment"). */
+  /** Outcome / population target. */
   target: z.string().min(1),
   /** How agents identify causal / comparative effects. */
   identificationStrategy: z.string().min(1),

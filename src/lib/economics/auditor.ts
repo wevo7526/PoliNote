@@ -11,11 +11,17 @@ export type AllowedNumericReference = {
   id: string;
   label: string;
   value: number;
+  kind: "observation" | "series_summary" | "estimate" | "robustness" | "literature";
+  seriesId?: string;
+  date?: string;
+  estimateId?: string;
 };
 
 /**
  * Collects every legitimate numeric value produced by fetched live observations,
- * computed econometric estimates, robustness specifications, and quote-backed literature.
+ * computed econometric estimates, robustness specifications, and quote-backed literature,
+ * tagged with its exact seriesId, date, or estimateId so numbers in prose must match
+ * the specific object they cite.
  */
 export function buildAllowedNumericRegistry(input: {
   bundles?: FetchedSeriesBundle[];
@@ -32,9 +38,29 @@ export function buildAllowedNumericRegistry(input: {
     const first = pts[0]!;
     const last = pts[pts.length - 1]!;
     refs.push(
-      { id: `${id}:latest`, label: `${id} latest (${last.date})`, value: last.value },
-      { id: `${id}:earliest`, label: `${id} earliest (${first.date})`, value: first.value },
-      { id: `${id}:count`, label: `${id} sample size N`, value: pts.length },
+      {
+        id: `${id}:latest`,
+        label: `${id} latest (${last.date})`,
+        value: last.value,
+        kind: "series_summary",
+        seriesId: id,
+        date: last.date,
+      },
+      {
+        id: `${id}:earliest`,
+        label: `${id} earliest (${first.date})`,
+        value: first.value,
+        kind: "series_summary",
+        seriesId: id,
+        date: first.date,
+      },
+      {
+        id: `${id}:count`,
+        label: `${id} sample size N`,
+        value: pts.length,
+        kind: "series_summary",
+        seriesId: id,
+      },
     );
     if (first.value !== 0) {
       const pctChange = ((last.value - first.value) / Math.abs(first.value)) * 100;
@@ -42,34 +68,98 @@ export function buildAllowedNumericRegistry(input: {
         id: `${id}:window_pct_change`,
         label: `${id} window % change`,
         value: pctChange,
+        kind: "series_summary",
+        seriesId: id,
       });
     }
-    // Include recent observations so exact period citations match
-    for (const pt of pts.slice(-24)) {
+    for (const pt of pts) {
       refs.push({
         id: `${id}:${pt.date}`,
         label: `${id} on ${pt.date}`,
         value: pt.value,
+        kind: "observation",
+        seriesId: id,
+        date: pt.date,
       });
     }
   }
 
   for (const est of input.estimates ?? []) {
+    const sid = est.spec.outcomeSeriesId;
     refs.push(
-      { id: `${est.id}:beta`, label: `${est.methodLabel} point estimate`, value: est.pointEstimate },
-      { id: `${est.id}:se`, label: `${est.methodLabel} standard error`, value: est.standardError },
-      { id: `${est.id}:ci_low`, label: `${est.methodLabel} CI lower`, value: est.ciLower },
-      { id: `${est.id}:ci_high`, label: `${est.methodLabel} CI upper`, value: est.ciUpper },
-      { id: `${est.id}:pval`, label: `${est.methodLabel} p-value`, value: est.pValue },
-      { id: `${est.id}:tstat`, label: `${est.methodLabel} t-stat`, value: est.tStat },
-      { id: `${est.id}:n`, label: `${est.methodLabel} N`, value: est.sampleSize },
-      { id: `${est.id}:ci_level`, label: "CI percentage", value: est.ciLevel * 100 },
+      {
+        id: `${est.id}:beta`,
+        label: `${est.methodLabel} point estimate`,
+        value: est.pointEstimate,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
+      },
+      {
+        id: `${est.id}:se`,
+        label: `${est.methodLabel} standard error`,
+        value: est.standardError,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
+      },
+      {
+        id: `${est.id}:ci_low`,
+        label: `${est.methodLabel} CI lower`,
+        value: est.ciLower,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
+      },
+      {
+        id: `${est.id}:ci_high`,
+        label: `${est.methodLabel} CI upper`,
+        value: est.ciUpper,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
+      },
+      {
+        id: `${est.id}:pval`,
+        label: `${est.methodLabel} p-value`,
+        value: est.pValue,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
+      },
+      {
+        id: `${est.id}:tstat`,
+        label: `${est.methodLabel} t-stat`,
+        value: est.tStat,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
+      },
+      {
+        id: `${est.id}:n`,
+        label: `${est.methodLabel} N`,
+        value: est.sampleSize,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
+      },
+      {
+        id: `${est.id}:ci_level`,
+        label: "CI percentage",
+        value: est.ciLevel * 100,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
+      },
     );
     if (est.diagnostics.rSquared !== undefined) {
       refs.push({
         id: `${est.id}:r2`,
         label: "R-squared",
         value: est.diagnostics.rSquared,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
       });
     }
     if (est.diagnostics.preTrendPValue !== undefined) {
@@ -77,6 +167,9 @@ export function buildAllowedNumericRegistry(input: {
         id: `${est.id}:pretrend_p`,
         label: "Pre-trend p-value",
         value: est.diagnostics.preTrendPValue,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
       });
     }
     if (est.diagnostics.adfStat !== undefined) {
@@ -84,6 +177,9 @@ export function buildAllowedNumericRegistry(input: {
         id: `${est.id}:adf`,
         label: "ADF statistic",
         value: est.diagnostics.adfStat,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
       });
     }
     for (const lp of est.localProjectionsPath ?? []) {
@@ -91,6 +187,9 @@ export function buildAllowedNumericRegistry(input: {
         id: `${est.id}:lp_h${lp.horizon}`,
         label: `Local projection h=${lp.horizon}`,
         value: lp.irfEstimate,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
       });
     }
     for (const ev of est.eventStudyPath ?? []) {
@@ -98,6 +197,9 @@ export function buildAllowedNumericRegistry(input: {
         id: `${est.id}:es_t${ev.relPeriod}`,
         label: `Event study k=${ev.relPeriod}`,
         value: ev.estimate,
+        kind: "estimate",
+        seriesId: sid,
+        estimateId: est.id,
       });
     }
   }
@@ -107,11 +209,25 @@ export function buildAllowedNumericRegistry(input: {
       id: `${rob.headlineEstimateId}:pass_rate_pct`,
       label: "Robustness pass rate %",
       value: rob.passRate * 100,
+      kind: "robustness",
+      estimateId: rob.headlineEstimateId,
     });
     for (const sp of rob.specs) {
       refs.push(
-        { id: `${sp.specId}:beta`, label: sp.label, value: sp.pointEstimate },
-        { id: `${sp.specId}:pval`, label: `${sp.label} p-value`, value: sp.pValue },
+        {
+          id: `${sp.specId}:beta`,
+          label: sp.label,
+          value: sp.pointEstimate,
+          kind: "robustness",
+          estimateId: rob.headlineEstimateId,
+        },
+        {
+          id: `${sp.specId}:pval`,
+          label: `${sp.label} p-value`,
+          value: sp.pValue,
+          kind: "robustness",
+          estimateId: rob.headlineEstimateId,
+        },
       );
     }
   }
@@ -122,11 +238,43 @@ export function buildAllowedNumericRegistry(input: {
         id: `lit:${lit.workId}`,
         label: lit.honestyLabel,
         value: lit.pointEstimate,
+        kind: "literature",
       });
     }
   }
 
   return refs;
+}
+
+/**
+ * Rounding-aware numeric matcher:
+ * Checks whether `numericValue` (parsed from `rawToken`) is an exact decimal rounding
+ * of `refValue` at the precision printed in `rawToken` (half-unit in the last decimal place).
+ */
+export function isRoundingAwareMatch(
+  rawToken: string,
+  numericValue: number,
+  refValue: number,
+): boolean {
+  if (!Number.isFinite(numericValue) || !Number.isFinite(refValue)) return false;
+  if (Math.abs(numericValue - refValue) < 1e-9) return true;
+
+  const cleaned = rawToken.replace(/[,%+-]/g, "").trim();
+  const dotIdx = cleaned.indexOf(".");
+  const decimals = dotIdx === -1 ? 0 : cleaned.length - dotIdx - 1;
+
+  // Half a unit in the last printed decimal place (plus tiny IEEE-754 epsilon)
+  const halfUlps = 0.5 * Math.pow(10, -decimals) + 1e-7;
+  if (Math.abs(numericValue - refValue) <= halfUlps) {
+    return true;
+  }
+
+  // Also check explicit toFixed(decimals) equality
+  if (Number(refValue.toFixed(decimals)) === numericValue) {
+    return true;
+  }
+
+  return false;
 }
 
 function isStructuralOrDateNumber(
@@ -142,18 +290,27 @@ function isStructuralOrDateNumber(
     return true;
   }
 
-  // Small structural integers (e.g., 1..12 stages, steps, lags, quarters Q+1..Q+8, 95% CI, 5% alpha)
-  if (num === 95 || num === 90 || num === 99 || num === 5 || num === 0) {
+  // Standard statistical confidence/significance levels (95%, 90%, 99%, 5%, 0.05, 0.01, 0.10, 0)
+  if (
+    num === 95 ||
+    num === 90 ||
+    num === 99 ||
+    num === 5 ||
+    num === 0 ||
+    rawToken === "0.05" ||
+    rawToken === "0.01" ||
+    rawToken === "0.10" ||
+    rawToken === "0.001"
+  ) {
     return true;
   }
-  if (!rawToken.includes(".") && !rawToken.endsWith("%") && Math.abs(num) <= 12) {
+  if (!rawToken.includes(".") && !rawToken.endsWith("%") && Math.abs(num) <= 10) {
     return true;
   }
 
-  // Preceded by date hyphen, section heading, HS code, or horizon marker
-  const prefix = fullText.slice(Math.max(0, matchIndex - 14), matchIndex);
+  const prefix = fullText.slice(Math.max(0, matchIndex - 16), matchIndex);
   if (
-    /(?:HS\s*|Section\s*|Table\s*|Figure\s*|Step\s*|Stage\s*|Q\+|h=|t[+-]|k=|\d{4}-|#|\bv)\s*$/i.test(
+    /(?:HS\s*|Section\s*|Table\s*|Figure\s*|Step\s*|Stage\s*|Q\+|h=|t[+-]|k=|lags?=|\d{4}-|#|\bv)\s*$/i.test(
       prefix,
     )
   ) {
@@ -164,23 +321,42 @@ function isStructuralOrDateNumber(
 }
 
 /**
+ * Extracts the surrounding sentence/clause context around a match index.
+ */
+function getSentenceContext(text: string, index: number): string {
+  const start = Math.max(0, text.lastIndexOf(".", index - 1) + 1, index - 180);
+  const nextDot = text.indexOf(".", index);
+  const end =
+    nextDot === -1 ? Math.min(text.length, index + 180) : Math.min(nextDot + 1, index + 180);
+  return text.slice(start, end);
+}
+
+/**
  * Deterministic Data Auditor (Code, NOT an LLM):
- * Extracts every numeric figure from generated prose, matches it against
- * fetched observations, computed econometric estimates, or quote-backed literature
- * within rounding tolerance, and strips/flags any untraced numbers.
+ * Extracts every numeric figure from generated prose and verifies that:
+ * 1. It matches a reference value using exact rounding-aware precision (`isRoundingAwareMatch`).
+ * 2. If the reference is a specific date's raw observation (`kind === "observation"`), the sentence
+ *    must explicitly cite that observation's date (`YYYY-MM-DD` or `YYYY-MM`) AND series ID (or `[ev_fred]`).
+ *    Otherwise, numbers in prose may only match estimate statistics, robustness statistics,
+ *    series summary endpoints (`latest`/`earliest`/`count`/`window_pct_change`), or quote-backed literature.
+ * 3. If the sentence explicitly names a series ID, the matched reference must belong to that series (or an estimate on that series).
  */
 export function auditGeneratedProseNumbers(
   text: string,
   registry: AllowedNumericReference[],
-  options?: { stripUntraced?: boolean; toleranceRel?: number; toleranceAbs?: number },
+  options?: { stripUntraced?: boolean },
 ): NumericAuditReport {
-  const tolRel = options?.toleranceRel ?? 0.03; // 3% relative rounding tolerance
-  const tolAbs = options?.toleranceAbs ?? 0.15; // 0.15 absolute rounding tolerance
   const entries: NumericAuditEntry[] = [];
   const untracedNumbers: NumericAuditEntry[] = [];
 
-  // Match numbers outside square-bracket citations and URLs
-  const tokenRegex = /(?<![A-Za-z0-9_/-])([+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|[+-]?\d+\.\d+%?|[+-]?\d+%)(?![A-Za-z0-9_/-])/g;
+  const knownSeriesIds = [
+    ...new Set(
+      registry.map((r) => r.seriesId).filter((s): s is string => Boolean(s)),
+    ),
+  ];
+
+  const tokenRegex =
+    /(?<![A-Za-z0-9_/-])([+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|[+-]?\d+\.\d+%?|[+-]?\d+%)(?![A-Za-z0-9_/-])/g;
 
   let sanitizedText = text;
   let match: RegExpExecArray | null;
@@ -189,7 +365,6 @@ export function auditGeneratedProseNumbers(
     const rawToken = match[1]!;
     const idx = match.index;
 
-    // Ignore numbers inside URLs or markdown link targets
     const before = text.slice(Math.max(0, idx - 40), idx);
     if (/https?:\/\/[^\s)]*$/i.test(before) || /\[[^\]]*$/i.test(before)) {
       continue;
@@ -204,14 +379,44 @@ export function auditGeneratedProseNumbers(
     );
     if (!Number.isFinite(numericValue)) continue;
 
+    const sentence = getSentenceContext(text, idx);
+    const mentionedSeriesIds = knownSeriesIds.filter((sid) =>
+      sentence.toUpperCase().includes(sid.toUpperCase()),
+    );
+    const mentionedDates = [
+      ...sentence.matchAll(/\b(19\d{2}|20\d{2})-(0[1-9]|1[0-2])(?:-(0[1-9]|[12]\d|3[01]))?\b/g),
+    ].map((m) => m[0]!);
+
     let bestRef: AllowedNumericReference | null = null;
     for (const ref of registry) {
-      const diff = Math.abs(numericValue - ref.value);
-      const rel = Math.abs(ref.value) > 1e-6 ? diff / Math.abs(ref.value) : diff;
-      if (diff <= tolAbs || rel <= tolRel) {
-        bestRef = ref;
-        break;
+      if (!isRoundingAwareMatch(rawToken, numericValue, ref.value)) {
+        continue;
       }
+
+      // If the sentence names specific series ID(s) and this ref belongs to a different series, skip it
+      if (
+        mentionedSeriesIds.length > 0 &&
+        ref.seriesId &&
+        !mentionedSeriesIds.some(
+          (sid) => sid.toUpperCase() === ref.seriesId!.toUpperCase(),
+        )
+      ) {
+        continue;
+      }
+
+      // Raw interior observations may ONLY be matched if the sentence explicitly cites that date (YYYY-MM or YYYY-MM-DD)
+      if (ref.kind === "observation") {
+        if (!ref.date || mentionedDates.length === 0) {
+          continue;
+        }
+        const dateCited = mentionedDates.some(
+          (d) => ref.date!.startsWith(d) || d.startsWith(ref.date!.slice(0, 7)),
+        );
+        if (!dateCited) continue;
+      }
+
+      bestRef = ref;
+      break;
     }
 
     const entry: NumericAuditEntry = {

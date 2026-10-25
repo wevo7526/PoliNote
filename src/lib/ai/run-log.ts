@@ -1,6 +1,11 @@
 import { layoutNodes } from "@/lib/ai/layout";
 import type { CrewStreamEvent } from "@/lib/ai/crew-events";
 import type { RunEventDraft } from "@/lib/db/events";
+import type {
+  EconometricEstimate,
+  PreRegistrationLock,
+  RobustnessBundle,
+} from "@/lib/economics/schemas";
 import type { RunSnapshot } from "@/lib/platform-types";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
@@ -32,8 +37,24 @@ export function applyRunEvent(
     case "run.created":
       return { ...next, run: { ...next.run, status: "draft" } };
     case "scope.updated": {
-      const contract = asRecord(event.payload).contract as ScopeContract | undefined;
-      return contract ? { ...next, scope: contract } : next;
+      const payload = asRecord(event.payload);
+      const contract = payload.contract as ScopeContract | undefined;
+      const estimates = Array.isArray(payload.estimates)
+        ? (payload.estimates as EconometricEstimate[])
+        : next.estimates;
+      const robustness = Array.isArray(payload.robustness)
+        ? (payload.robustness as RobustnessBundle[])
+        : next.robustness;
+      const preRegistrationLock =
+        (payload.preRegistrationLock as PreRegistrationLock | undefined) ??
+        next.preRegistrationLock;
+      return {
+        ...next,
+        scope: contract ?? next.scope,
+        estimates,
+        robustness,
+        preRegistrationLock,
+      };
     }
     case "node.created":
     case "node.updated":
@@ -185,6 +206,18 @@ export function draftsFromCrewEvent(
           type: "export.generated",
           agent: "synthesizer",
           payload: { brief: event.brief, appendix: event.appendix },
+        },
+      ];
+    case "estimates":
+      return [
+        {
+          type: "scope.updated",
+          agent: "econometrician",
+          payload: {
+            estimates: event.estimates,
+            robustness: event.robustness,
+            preRegistrationLock: event.preRegistrationLock,
+          },
         },
       ];
     case "flag":

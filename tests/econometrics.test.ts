@@ -340,9 +340,10 @@ test("6. Synthetic Control simplex solver, Frequency Conversion, Window Derivati
   assert.equal(quarterly[0]?.date, "2023-01-01");
   assert.equal(quarterly[0]?.value, 20);
 
-  // Window derivation for TCJA (2018) starts at or before 2012
+  // Window derivation uses explicit policyDate (no hardcoded TCJA 2018 pin)
   const win = deriveObservationWindow({
-    question: "Did the 2017 TCJA increase business investment?",
+    question: "Did the corporate tax cut increase business investment?",
+    policyDate: "2018-01-01",
   });
   assert.equal(win.policyDate, "2018-01-01");
   assert.ok(Number.parseInt(win.observationStart.slice(0, 4), 10) <= 2012);

@@ -3,6 +3,10 @@
 import type { RefObject } from "react";
 import { ResponseCard } from "./ResponseCard";
 import type { ThreadItem } from "./thread-types";
+import type {
+  EconometricEstimate,
+  RobustnessBundle,
+} from "@/lib/economics/schemas";
 import { groupThreadTurns } from "@/lib/ui/thread-turns";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionNode } from "@/schemas/digression";
@@ -15,6 +19,8 @@ type ThreadProps = {
   nodes?: DigressionNode[];
   analyses?: Record<string, NodeAnalysis>;
   scope?: ScopeContract | null;
+  estimates?: EconometricEstimate[];
+  robustness?: RobustnessBundle[];
   onOpenNode: (id: string) => void;
   listRef: RefObject<HTMLDivElement | null>;
 };
@@ -25,6 +31,8 @@ export function Thread({
   nodes = [],
   analyses = {},
   scope = null,
+  estimates,
+  robustness,
   onOpenNode,
   listRef,
 }: ThreadProps) {
@@ -57,6 +65,8 @@ export function Thread({
                   nodes={nodes}
                   analyses={analyses}
                   scope={scope}
+                  estimates={estimates}
+                  robustness={robustness}
                   finished={turn.finished}
                   onOpenNode={onOpenNode}
                 />

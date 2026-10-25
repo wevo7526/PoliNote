@@ -74,8 +74,19 @@ export function DraftDesk() {
         scope: snapshot?.scope ?? null,
         nodes: snapshot?.nodes ?? [],
         fredSeries,
+        storedEstimates: snapshot?.estimates,
+        storedRobustness: snapshot?.robustness,
+        preRegistrationLock: snapshot?.preRegistrationLock,
       }),
-    [snapshot?.scope, snapshot?.run.title, snapshot?.nodes, fredSeries],
+    [
+      snapshot?.scope,
+      snapshot?.run.title,
+      snapshot?.nodes,
+      snapshot?.estimates,
+      snapshot?.robustness,
+      snapshot?.preRegistrationLock,
+      fredSeries,
+    ],
   );
 
   if (!activeId || !snapshot) {
@@ -292,6 +303,7 @@ export function DraftDesk() {
             </button>
             <button
               type="button"
+              disabled={!econModel.headlineEstimate || fredSeries.length === 0}
               className="node-action text-[var(--copper)]"
               onClick={() =>
                 downloadCsvBundle({
@@ -305,6 +317,7 @@ export function DraftDesk() {
             </button>
             <button
               type="button"
+              disabled={!econModel.headlineEstimate || fredSeries.length === 0}
               className="node-action text-[var(--copper)]"
               onClick={() =>
                 downloadJupyterNotebook({

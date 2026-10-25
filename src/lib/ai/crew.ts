@@ -1,5 +1,6 @@
-import { gateway, generateText, streamText, type LanguageModel } from "ai";
+import { gateway, generateText, type LanguageModel } from "ai";
 import { openai } from "@ai-sdk/openai";
+import { SkepticOutputSchema, type SkepticOutput } from "@/agents/schemas";
 import { allowRoleAction } from "@/agents/walls";
 import {
   type CrewStreamEvent,
@@ -26,6 +27,7 @@ import { filterReputableHits } from "@/lib/sources/reputable";
 import { searchPolicyWeb, type WebHit } from "@/lib/tools/firecrawl";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import {
+  evaluateClaimStatusFromEstimate,
   type ConfidenceBand,
   type DigressionEdge,
   type DigressionEdgeKind,
@@ -42,6 +44,8 @@ import {
 type ScopeFields = {
   jurisdiction: string;
   horizon: string;
+  policyDate: string | null;
+  policyDateSource: string;
   objective: string;
   instrument: string;
   target: string;
@@ -142,13 +146,6 @@ const FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-4.1"];
 const JSON_TIMEOUT_MS = 40_000;
 const ANALYSIS_TIMEOUT_MS = 50_000;
 
-const NARRATION_OPTIONS = {
-  openai: {
-    reasoningEffort: "low" as const,
-    reasoningSummary: null,
-  },
-};
-
 const JSON_OPTIONS = {
   openai: {
     reasoningEffort: "low" as const,
@@ -160,13 +157,17 @@ const SCOPE_STYLE = `Write every scope field as a dense research-protocol paragr
 
 objective: Start with "Digress …". State the analytic task, the hypothesized direction, the unit of analysis, and the policy date(s).
 
+policyDate: Exact YYYY-MM-DD enactment or effective date of the policy instrument, or null if the question has no concrete enactment date.
+
+policyDateSource: Cite the specific statute, public law number, executive order, Federal Register notice, or congressional record establishing policyDate.
+
 instrument: Inventory the statutory tools — appropriations, tax rates, tariffs, regulation, procurement, or monetary rules. Separate enacted policy from proposals.
 
 target: Name the outcome series to be estimated, the unit of analysis, geography, and treatment/control candidates.
 
 identificationStrategy: Name the econometric estimator from the catalog (Event Study, Jordà Local Projections, Difference-in-Differences, Synthetic Control, ARIMA Counterfactual, Chow/Bai-Perron Break Test), its identifying assumptions, and named confounders in the observation window.
 
-horizon: Give explicit pre-policy and post-policy dates (at least 5 years pre-policy through latest available).
+horizon: Give explicit pre-policy and post-policy dates (at least 6 years pre-policy through latest available).
 
 jurisdiction: Name the polity and higher-law constraints.
 
@@ -213,8 +214,11 @@ type ModelSlot = {
   demote: () => boolean;
 };
 
-function createModelSlot(): ModelSlot {
-  const queue = modelQueue();
+function createModelSlot(preferredOverride?: string): ModelSlot {
+  const baseQueue = modelQueue();
+  const queue = preferredOverride
+    ? [preferredOverride, ...baseQueue.filter((m) => m !== preferredOverride)]
+    : baseQueue;
   let index = 0;
   return {
     get id() {
@@ -331,126 +335,45 @@ function wait(ms: number): Promise<void> {
   });
 }
 
-function fallbackScope(question: string): ScopeFields {
-  const q = question.trim() || "the stated policy question";
-  return {
-    jurisdiction:
-      "The polity named in the question, including statutory and higher-law constraints that bind the policy instrument.",
-    horizon:
-      "At least 6 years of pre-policy historical observations through the latest available release date to test pre-trends and dynamic post-policy responses.",
-    objective: `Digress a pre-registered econometric and institutional analysis of ${q}. Separate statutory authority, transmission mechanisms, live empirical series, and distributional incidence.`,
-    instrument:
-      "The concrete policy instrument named or implied in the question — tariffs, tax provisions, appropriations, regulatory mandates, or monetary rules.",
-    target:
-      "Primary macroeconomic and sector outcome series fetched live from official statistical providers (FRED/ALFRED, BEA, BLS, Census, World Bank).",
-    identificationStrategy:
-      "Pre-registered Event Study with lead/lag pre-trend F-test and Jordà Local Projections with Newey–West HAC standard errors, supplemented by automatic specification curve robustness checks across windows, transforms, and in-time placebos.",
-    distributionalCut:
-      "Statutory vs. economic incidence across households, domestic producers, downstream input-using firms, workers, and public budgets.",
-    baseline:
-      "Pre-policy counterfactual trajectory projected forward with explicit confidence intervals.",
-    allowedMethods: [
-      "literature",
-      "time_series",
-      "legal_text",
-      "macro",
-      "incidence",
-      "counterfactual",
-    ],
-    forbiddenMoves: [
-      "Never fabricate or hard-code economic numbers",
-      "Never mark claims supported without a computed econometric estimate",
-    ],
-  };
-}
-
-function fallbackGraph(scope: ScopeFields): GraphStep {
-  const clip = (text: string, n: number) =>
-    text.length > n ? `${text.slice(0, n).trim()}…` : text;
-  const nodes: RawNode[] = [
-    {
-      key: "con_legal",
-      kind: "constraint",
-      status: "proposed",
-      title: "Statutory instrument & authority",
-      body: clip(scope.instrument, 340),
-      confidence: "unknown",
-      agent: "scoper",
-      analysisTitle: "Statutory instrument & authority",
-      analysis: scope.instrument,
-    },
-    {
-      key: "mech_channel",
-      kind: "mechanism",
-      status: "proposed",
-      title: "Transmission mechanism & identification",
-      body: clip(scope.identificationStrategy, 340),
-      confidence: "unknown",
-      agent: "identification_strategist",
-      analysisTitle: "Transmission mechanism & identification",
-      analysis: scope.identificationStrategy,
-    },
-    {
-      key: "claim_core",
-      kind: "claim",
-      status: "proposed",
-      title: "Primary testable policy claim",
-      body: clip(scope.objective, 340),
-      confidence: "unknown",
-      agent: "scoper",
-      analysisTitle: "Primary testable policy claim",
-      analysis: scope.objective,
-    },
-    {
-      key: "inc_winners",
-      kind: "incidence",
-      status: "proposed",
-      title: "Distributional & sectoral incidence",
-      body: clip(scope.distributionalCut, 340),
-      confidence: "unknown",
-      agent: "econometrician",
-      analysisTitle: "Distributional & sectoral incidence",
-      analysis: scope.distributionalCut,
-    },
-    {
-      key: "unc_id",
-      kind: "uncertainty",
-      status: "contested",
-      title: "Skeptic red-team critique & confounders",
-      body: "Evaluates contemporaneous macro shocks, reverse causality, pre-trend stability, and specification curve fragility.",
-      confidence: "unknown",
-      agent: "skeptic",
-      analysisTitle: "Skeptic red-team critique & confounders",
-      analysis: scope.identificationStrategy,
-    },
-    {
-      key: "cf_baseline",
-      kind: "counterfactual",
-      status: "proposed",
-      title: "Pre-policy counterfactual & fork candidate",
-      body: clip(scope.baseline, 340),
-      confidence: "unknown",
-      agent: "identification_strategist",
-      analysisTitle: "Pre-policy counterfactual & fork candidate",
-      analysis: scope.baseline,
-    },
-  ];
-  return {
-    nodes,
-    edges: [
-      { sourceKey: "con_legal", targetKey: "mech_channel", kind: "depends_on" },
-      { sourceKey: "mech_channel", targetKey: "claim_core", kind: "supports" },
-      { sourceKey: "claim_core", targetKey: "inc_winners", kind: "causal" },
-      { sourceKey: "unc_id", targetKey: "claim_core", kind: "attacks" },
-      { sourceKey: "cf_baseline", targetKey: "claim_core", kind: "alternatives" },
-    ],
-  };
-}
-
-function coerceScope(raw: unknown, question: string): ScopeStep {
+function validateAndParseScope(raw: unknown, question: string): ScopeStep {
   const root = asRecord(raw);
   const scope = asRecord(root.scope ?? raw);
-  const fallback = fallbackScope(question);
+
+  const requiredKeys = [
+    "jurisdiction",
+    "horizon",
+    "objective",
+    "instrument",
+    "target",
+    "identificationStrategy",
+    "distributionalCut",
+    "baseline",
+  ] as const;
+
+  const missing = requiredKeys.filter(
+    (k) => typeof scope[k] !== "string" || !String(scope[k]).trim(),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Scoper JSON validation failed: missing required scope fields (${missing.join(", ")})`,
+    );
+  }
+
+  const rawPolicyDate =
+    typeof scope.policyDate === "string"
+      ? scope.policyDate.trim()
+      : typeof root.policyDate === "string"
+        ? root.policyDate.trim()
+        : null;
+  const policyDate =
+    rawPolicyDate && /^\d{4}-\d{2}-\d{2}$/.test(rawPolicyDate)
+      ? rawPolicyDate
+      : null;
+  const policyDateSource = asString(
+    scope.policyDateSource ?? root.policyDateSource,
+    policyDate ? "Statutory / congressional enactment record" : "No single enactment date identified",
+  );
+
   const methods = asArray(scope.allowedMethods)
     .map((item) => pick(item, METHODS, "literature"))
     .concat(["literature", "time_series", "legal_text", "macro", "incidence"])
@@ -465,25 +388,22 @@ function coerceScope(raw: unknown, question: string): ScopeStep {
     ECONOMETRIC_METHODS,
     "event_study",
   );
+
   return {
     runTitle: asString(root.runTitle, question).slice(0, 80),
     hypothesizedDirection,
     preferredMethod,
     scope: {
-      jurisdiction: asString(scope.jurisdiction, fallback.jurisdiction),
-      horizon: asString(scope.horizon, fallback.horizon),
-      objective: asString(scope.objective, fallback.objective),
-      instrument: asString(scope.instrument, fallback.instrument),
-      target: asString(scope.target, fallback.target),
-      identificationStrategy: asString(
-        scope.identificationStrategy,
-        fallback.identificationStrategy,
-      ),
-      distributionalCut: asString(
-        scope.distributionalCut,
-        fallback.distributionalCut,
-      ),
-      baseline: asString(scope.baseline, fallback.baseline),
+      jurisdiction: asString(scope.jurisdiction, ""),
+      horizon: asString(scope.horizon, ""),
+      policyDate,
+      policyDateSource,
+      objective: asString(scope.objective, ""),
+      instrument: asString(scope.instrument, ""),
+      target: asString(scope.target, ""),
+      identificationStrategy: asString(scope.identificationStrategy, ""),
+      distributionalCut: asString(scope.distributionalCut, ""),
+      baseline: asString(scope.baseline, ""),
       allowedMethods:
         methods.length > 0 ? methods : ["literature", "expert_judgment"],
       forbiddenMoves: asArray(scope.forbiddenMoves)
@@ -551,12 +471,17 @@ function parseAnalyses(
   return map;
 }
 
-function coerceGraph(raw: unknown): GraphStep {
+function validateAndParseGraph(raw: unknown): GraphStep {
   const root = Array.isArray(raw) ? { nodes: raw, edges: [] } : asRecord(raw);
   const nodes = asArray(root.nodes)
     .map((item, index) => coerceNode(item, index))
     .filter((item): item is RawNode => item !== null)
     .slice(0, 8);
+
+  if (nodes.length === 0) {
+    throw new Error("Graph JSON validation failed: model returned 0 valid nodes");
+  }
+
   const edges: RawEdge[] = [];
   for (const item of asArray(root.edges)) {
     const edge = asRecord(item);
@@ -569,10 +494,6 @@ function coerceGraph(raw: unknown): GraphStep {
       kind: pick(edge.kind, EDGE_KINDS, "supports"),
       label: asString(edge.label, "") || undefined,
     });
-  }
-
-  if (nodes.length === 0) {
-    return { nodes: [], edges: [] };
   }
 
   if (edges.length === 0 && nodes.length > 1) {
@@ -599,6 +520,8 @@ function hydrateScope(
     question,
     jurisdiction: fields.jurisdiction,
     horizon: fields.horizon,
+    policyDate: fields.policyDate,
+    policyDateSource: fields.policyDateSource,
     objective: fields.objective,
     instrument: fields.instrument,
     target: fields.target,
@@ -692,12 +615,21 @@ function hydrateAnalysis(
   };
 }
 
-async function askJson(
+/**
+ * Calls the LLM for a structured JSON payload and validates it with `validator`.
+ * If parsing or schema validation fails, automatically retries with a schema-repair prompt
+ * passing the exact validation error and raw output. Never substitutes canned templates.
+ */
+async function askJsonWithSchemaRepair<T>(
   model: ModelSlot,
   system: string,
   prompt: string,
-): Promise<unknown> {
+  validator: (parsed: unknown) => T,
+): Promise<T> {
   let useReasoning = true;
+  let repairInstruction = "";
+  let attempts = 0;
+
   for (;;) {
     const timeout = withTimeout(JSON_TIMEOUT_MS);
     try {
@@ -706,22 +638,28 @@ async function askJson(
         providerOptions: useReasoning ? JSON_OPTIONS : undefined,
         abortSignal: timeout.signal,
         system: `${AUTONOMY}\n${system}\nReturn ONLY a compact JSON object. No markdown fences. Keep string values concise.`,
-        prompt,
+        prompt: repairInstruction ? `${prompt}\n\n${repairInstruction}` : prompt,
       });
-      return extractJson(text);
+      const extracted = extractJson(text);
+      return validator(extracted);
     } catch (error) {
-      console.error(
-        "[polinote/crew] json call failed",
-        model.id,
-        error instanceof Error ? redactSecrets(error.message) : "json error",
-      );
+      const errMsg =
+        error instanceof Error ? redactSecrets(error.message) : "json error";
+      console.error("[polinote/crew] json call failed", model.id, errMsg);
+
       if (isReasoningSummaryError(error) && useReasoning) {
         useReasoning = false;
         continue;
       }
-      if (isAbortError(error)) throw new Error("Model returned no JSON object");
-      if (isModelUnavailable(error) && model.demote()) continue;
-      throw error;
+      if (isModelUnavailable(error) && model.demote()) {
+        continue;
+      }
+      if (attempts < 1 && !isAbortError(error)) {
+        attempts += 1;
+        repairInstruction = `SCHEMA REPAIR REQUIRED: Your previous output failed validation (${errMsg}). Repair the JSON so all required fields are present and valid.`;
+        continue;
+      }
+      throw new Error(`LLM JSON validation failed after schema repair: ${errMsg}`);
     } finally {
       timeout.clear();
     }
@@ -791,7 +729,7 @@ export async function* streamCrewTurn(input: {
   const model = createModelSlot();
   const ts = nowIso();
   const revising = (input.prior?.nodeKeys.length ?? 0) > 0;
-  yield workingStatus("Step 1/7 · Scoper & Literature intake…");
+  yield workingStatus("Step 1/7 · Scoper & policy date intake…");
   const web = await searchPolicyWeb(input.latestMessage || input.question);
 
   const context = JSON.stringify({
@@ -806,26 +744,28 @@ export async function* streamCrewTurn(input: {
 
   let scopeOut: ScopeStep;
   try {
-    scopeOut = coerceScope(
-      await askJson(
-        model,
-        `You are PoliNote's Scoper & Identification Strategist. Return JSON with:
+    scopeOut = await askJsonWithSchemaRepair(
+      model,
+      `You are PoliNote's Scoper & Identification Strategist. Return JSON with:
 - runTitle (max 80 chars)
 - hypothesizedDirection ("positive" | "negative" | "ambiguous")
 - preferredMethod ("event_study" | "local_projections_jorda" | "arima_forecast_counterfactual" | "descriptive_newey_west" | "did_twfe" | "synthetic_control")
-- scope: { jurisdiction, horizon, objective, instrument, target, identificationStrategy, distributionalCut, baseline, allowedMethods, forbiddenMoves }
+- policyDate ("YYYY-MM-DD" enactment/effective date if the policy has a known historical date, or null if none exists)
+- policyDateSource (statutory citation, Public Law number, Federal Register notice, or Congress record for policyDate)
+- scope: { jurisdiction, horizon, policyDate, policyDateSource, objective, instrument, target, identificationStrategy, distributionalCut, baseline, allowedMethods, forbiddenMoves }
 ${SCOPE_STYLE}
 Do not invent any empirical numbers in the scope.`,
-        context,
-      ),
-      input.question,
+      context,
+      (parsed) => validateAndParseScope(parsed, input.question),
     );
   } catch (error) {
-    console.error(
-      "[polinote/crew] scope json failed, using fallback",
-      error instanceof Error ? redactSecrets(error.message) : "scope error",
-    );
-    scopeOut = coerceScope(input.prior?.scope ?? {}, input.question);
+    const errMsg =
+      error instanceof Error ? redactSecrets(error.message) : "Scope generation failed";
+    yield {
+      type: "error",
+      message: `Scoper failed after schema repair: ${errMsg}`,
+    };
+    return;
   }
 
   const contract = hydrateScope(input.runId, input.question, scopeOut.scope, ts);
@@ -842,7 +782,7 @@ Do not invent any empirical numbers in the scope.`,
       id: crypto.randomUUID(),
       kind: "narration",
       agent: "scoper",
-      text: `Locked Scope Contract for “${scopeOut.runTitle}” (hypothesized direction: ${scopeOut.hypothesizedDirection}, primary estimator: ${scopeOut.preferredMethod}).`,
+      text: `Locked Scope Contract for “${scopeOut.runTitle}” (policy date: ${contract.policyDate ?? "unspecified"} [${contract.policyDateSource ?? "no source"}], hypothesized direction: ${scopeOut.hypothesizedDirection}, primary estimator: ${scopeOut.preferredMethod}).`,
     },
   };
 
@@ -854,7 +794,6 @@ Do not invent any empirical numbers in the scope.`,
     return;
   }
 
-  yield workingStatus("Step 2/7 · Pre-registration lock & Data Scout query planning…");
   const queries = yield* streamInstrumentParser({
     userId: input.userId,
     runId: input.runId,
@@ -867,45 +806,44 @@ Do not invent any empirical numbers in the scope.`,
     liveNodes.set(node.id, node);
   }
 
-  yield workingStatus("Step 3/7 · Identification Strategist & Literature Analyst placing spine…");
+  yield workingStatus(
+    "Step 3/7 · Identification Strategist & Literature Analyst placing spine…",
+  );
 
   let graphOut: GraphStep;
   try {
-    graphOut = coerceGraph(
-      await askJson(
-        model,
-        revising
-          ? `Return compact JSON: { "nodes": [...], "edges": [...] }.
+    graphOut = await askJsonWithSchemaRepair(
+      model,
+      revising
+        ? `Return compact JSON: { "nodes": [...], "edges": [...] }.
 Add 2–4 nodes that extend the existing graph, or revise existing keys.
 Each node: key, kind, title, body (2 sentences, NO fabricated numbers), status (proposed|contested), confidence, agent (scoper|identification_strategist|econometrician|literature_analyst|skeptic).
 Edges: sourceKey, targetKey, kind (supports|attacks|depends_on|elaborates|alternatives|causal).`
-          : `Return compact JSON: { "nodes": [...], "edges": [...] }.
+        : `Return compact JSON: { "nodes": [...], "edges": [...] }.
 Exactly 6 nodes and 5–7 edges that form ONE connected argument under this scope.
 Spine first (required kinds): constraint (instrument), mechanism, claim, incidence.
 Then digressions: uncertainty (skeptic critique) and either counterfactual or fork.
 Each node: key, kind, title, body (2 sentences, DO NOT invent any statistics or numbers), status (proposed|contested), confidence, agent (scoper|identification_strategist|econometrician|literature_analyst|skeptic).
 Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`,
-        JSON.stringify({
-          question: input.question,
-          latestUserMessage: input.latestMessage,
-          projectContext: input.projectContext || undefined,
-          scope: scopeOut.scope,
-          existingNodeKeys: input.prior?.nodeKeys ?? [],
-          existingNodeTitles: input.prior?.nodeTitles ?? [],
-          webLeads: web,
-        }),
-      ),
+      JSON.stringify({
+        question: input.question,
+        latestUserMessage: input.latestMessage,
+        projectContext: input.projectContext || undefined,
+        scope: scopeOut.scope,
+        existingNodeKeys: input.prior?.nodeKeys ?? [],
+        existingNodeTitles: input.prior?.nodeTitles ?? [],
+        webLeads: web,
+      }),
+      validateAndParseGraph,
     );
   } catch (error) {
-    console.error(
-      "[polinote/crew] skeleton json failed, using fallback graph",
-      error instanceof Error ? redactSecrets(error.message) : "skeleton error",
-    );
-    graphOut = revising ? { nodes: [], edges: [] } : fallbackGraph(scopeOut.scope);
-  }
-
-  if (graphOut.nodes.length === 0 && !revising) {
-    graphOut = fallbackGraph(scopeOut.scope);
+    const errMsg =
+      error instanceof Error ? redactSecrets(error.message) : "Graph generation failed";
+    yield {
+      type: "error",
+      message: `Argument map generation failed after schema repair: ${errMsg}`,
+    };
+    return;
   }
 
   const keyToId = new Map<string, string>();
@@ -953,8 +891,10 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
     await wait(30);
   }
 
-  // Step 4 & 5: Live Data Pull, Econometric Estimation, and Automatic Robustness Suite
-  yield workingStatus("Step 4/7 · Fetching live series & running econometric estimation…");
+  // Step 4 & Step 5: Pre-registration lock -> Live Data Pull -> Econometric Estimation -> Automatic Robustness Suite
+  yield workingStatus(
+    "Step 4/7 · Fetching live series observations & running econometric estimation…",
+  );
   const mcpResult = yield* streamMcpSpecialists({
     userId: input.userId,
     runId: input.runId,
@@ -968,6 +908,13 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
   for (const node of mcpResult.nodes) {
     liveNodes.set(node.id, node);
   }
+
+  const numericRegistry = buildAllowedNumericRegistry({
+    bundles: mcpResult.bundles,
+    estimates: mcpResult.estimates,
+    robustness: mcpResult.robustness,
+    literature: mcpResult.literatureEstimates,
+  });
 
   const mcpSpanDigest = mcpResult.spans.map((span) => ({
     id: span.id,
@@ -987,6 +934,7 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
     id: est.id,
     method: est.methodLabel,
     honestyLabel: est.honestyLabel,
+    relabelReason: est.relabelReason,
     seriesId: est.spec.outcomeSeriesId,
     pointEstimate: est.pointEstimate,
     standardError: est.standardError,
@@ -998,6 +946,7 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
     seMethod: est.seMethod,
     preTrendPValue: est.diagnostics.preTrendPValue,
     preRegistrationHash: est.spec.preRegistration.lockHash.slice(0, 12),
+    preRegistrationLockedAt: est.spec.preRegistration.lockedAt,
   }));
 
   const robustnessDigest = mcpResult.robustness.map((r) => ({
@@ -1010,8 +959,91 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
     specs: r.specs,
   }));
 
-  // Step 6: Skeptic / Red Team & Verification Wall
-  yield workingStatus("Step 6/7 · Skeptic Red-Team critique & verification wall…");
+  // Step 6: Real Skeptic / Red-Team Model Call (uses SKEPTIC_MODEL when configured)
+  yield workingStatus(
+    "Step 6/7 · Skeptic Red-Team model critique & verification wall…",
+  );
+  const skepticModel = createModelSlot(process.env.SKEPTIC_MODEL?.trim());
+  let skepticOutput: SkepticOutput | null = null;
+
+  try {
+    skepticOutput = await askJsonWithSchemaRepair(
+      skepticModel,
+      `You are PoliNote's Skeptic / Red Team. Return JSON matching SkepticOutputSchema:
+{
+  "namedConfounders": ["specific historical events or macro shocks in the observation window"],
+  "reverseCausalityRisk": "1-2 sentences on endogeneity or anticipation",
+  "specificationFragility": "1-2 sentences critiquing pre-trends, comparison group, or window sensitivity",
+  "externalValidityLimits": "1-2 sentences on generalizability limits",
+  "unresolvedObjectionsCount": 0..3,
+  "whatWouldChangeMyMind": [
+    {
+      "id": "fork_1",
+      "title": "short fork title",
+      "description": "what specific empirical result would flip the conclusion",
+      "forkParameter": "method" | "window" | "series" | "transform" | "placebo_date",
+      "proposedValue": "specific parameter value"
+    }
+  ]
+}
+Do not invent any numbers not present in the prompt.`,
+      JSON.stringify({
+        question: input.question,
+        scope: scopeOut.scope,
+        estimates: estimateDigest,
+        robustness: robustnessDigest,
+        dataErrors: mcpResult.dataErrors,
+      }),
+      (parsed) => SkepticOutputSchema.parse(parsed),
+    );
+  } catch (error) {
+    console.warn(
+      "[polinote/skeptic] model call failed:",
+      error instanceof Error ? redactSecrets(error.message) : "error",
+    );
+  }
+
+  // Apply Skeptic's unresolvedObjectionsCount to Claim confidence score and update unc_id node
+  if (skepticOutput && mcpResult.estimates[0]) {
+    const headlineEst = mcpResult.estimates[0];
+    const robBundle = mcpResult.robustness[0] ?? null;
+    for (const node of liveNodes.values()) {
+      if (node.kind === "claim" && node.estimateId === headlineEst.id) {
+        const reEval = evaluateClaimStatusFromEstimate({
+          estimate: headlineEst,
+          robustness: robBundle,
+          hypothesizedDirection:
+            node.hypothesizedDirection ?? scopeOut.hypothesizedDirection,
+          unresolvedSkepticObjections: skepticOutput.unresolvedObjectionsCount,
+        });
+        const updatedClaim: DigressionNode = {
+          ...node,
+          status: reEval.status,
+          confidence: reEval.confidence,
+          statusReason: `${reEval.reason} (Skeptic unresolved objections: ${skepticOutput.unresolvedObjectionsCount}).`,
+          updatedAt: nowIso(),
+        };
+        liveNodes.set(updatedClaim.id, updatedClaim);
+        yield { type: "node", node: updatedClaim };
+      }
+      if (node.kind === "uncertainty") {
+        const rawCritique = `${skepticOutput.specificationFragility} Confounders in window: ${skepticOutput.namedConfounders.join("; ")}.`;
+        const auditedCritique = auditGeneratedProseNumbers(
+          rawCritique,
+          numericRegistry,
+          { stripUntraced: true },
+        ).sanitizedText;
+        const updatedUnc: DigressionNode = {
+          ...node,
+          body: auditedCritique.slice(0, 360),
+          updatedAt: nowIso(),
+        };
+        liveNodes.set(updatedUnc.id, updatedUnc);
+        yield { type: "node", node: updatedUnc };
+      }
+    }
+  }
+
   const afterCritic = yield* applyCriticWalls([...liveNodes.values()]);
   for (const node of afterCritic) {
     liveNodes.set(node.id, node);
@@ -1019,34 +1051,32 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
 
   const nodeList = [...liveNodes.values()];
   const supportedNodes = nodeList.filter((n) => n.status === "supported");
-  const contradictedNodes = nodeList.filter((n) => n.status === "contradicted");
-  const inconclusiveNodes = nodeList.filter((n) => n.status === "inconclusive");
-  const unverifiableNodes = nodeList.filter((n) => n.status === "unverifiable");
 
-  yield {
-    type: "narration",
-    item: {
-      id: crypto.randomUUID(),
-      kind: "narration",
-      agent: "skeptic",
-      text:
-        mcpResult.estimates.length > 0
-          ? `Skeptic Red-Team & Code Verification Audit: ${supportedNodes.length} claim(s) supported, ${contradictedNodes.length} contradicted, ${inconclusiveNodes.length} inconclusive. What would change my mind: (1) Fork the observation window to exclude post-2020 pandemic volatility; (2) Re-estimate in first-differences / log-changes; (3) Include a macro control series to test for omitted variable bias.`
-          : `Skeptic & Verification Audit: ${unverifiableNodes.length} claim(s) marked UNVERIFIABLE because live series observations were unavailable (${mcpResult.dataErrors[0] ?? "no provider key configured"}). Zero fallback numbers were substituted.`,
-    },
-  };
+  if (skepticOutput) {
+    const flipList = skepticOutput.whatWouldChangeMyMind
+      .map((f, i) => `(${i + 1}) ${f.title}: ${f.description}`)
+      .join("; ");
+    const rawSkepticNarration = `Skeptic Red-Team Critique (${skepticOutput.unresolvedObjectionsCount} unresolved objection${skepticOutput.unresolvedObjectionsCount === 1 ? "" : "s"}): Confounders in window: ${skepticOutput.namedConfounders.join(", ")}. Reverse causality: ${skepticOutput.reverseCausalityRisk} Specification fragility: ${skepticOutput.specificationFragility} What would change my mind: ${flipList}`;
+    const auditedSkepticNarration = auditGeneratedProseNumbers(
+      rawSkepticNarration,
+      numericRegistry,
+      { stripUntraced: true },
+    ).sanitizedText;
+
+    yield {
+      type: "narration",
+      item: {
+        id: crypto.randomUUID(),
+        kind: "narration",
+        agent: "skeptic",
+        text: auditedSkepticNarration,
+      },
+    };
+  }
 
   yield workingStatus(
     "Step 7/7 · Synthesizer writing brief & Data Auditor verifying every number…",
   );
-
-  // Build the deterministic allowed numeric registry for the Data Auditor
-  const numericRegistry = buildAllowedNumericRegistry({
-    bundles: mcpResult.bundles,
-    estimates: mcpResult.estimates,
-    robustness: mcpResult.robustness,
-    literature: mcpResult.literatureEstimates,
-  });
 
   let draft = fallbackDraft(
     scopeOut.runTitle,
@@ -1066,6 +1096,7 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
             mcpSpans: mcpSpanDigest,
             estimates: estimateDigest,
             robustness: robustnessDigest,
+            skeptic: skepticOutput,
             literatureEstimates: mcpResult.literatureEstimates,
             dataErrors: mcpResult.dataErrors,
             nodes: graphOut.nodes.map((node) => ({
@@ -1080,12 +1111,12 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
       : Promise.resolve(new Map<string, { title: string; body: string }>());
 
   const synthTask = allowRoleAction("synthesizer", { type: "write_draft" })
-    ? askJson(
+    ? askJsonWithSchemaRepair(
         model,
         `You are PoliNote's Synthesizer. Return JSON { "brief", "appendix" }.
 Every factual sentence MUST cite an existing node short key in square brackets, like [claim_core] or [ev_fred].
-CRITICAL NUMERIC RULE: Every single number you write MUST come verbatim from the provided "estimates", "robustness", "mcpSpans", or "literatureEstimates" objects. If "estimates" is empty, DO NOT write any numbers—state clearly that live data was unavailable.
-State the honesty label (e.g. Quasi-experimental (Event Study), Associational, Descriptive) and confidence band explicitly.
+CRITICAL NUMERIC RULE: Every single number you write MUST come verbatim from the provided "estimates", "robustness", "mcpSpans", or "literatureEstimates" objects, and you must name the series ID or date when citing an observation. If "estimates" is empty, DO NOT write any numbers—state clearly that live data was unavailable.
+State the exact honesty label (e.g. Descriptive, Associational, Quasi-experimental (Difference-in-Differences)) and confidence band explicitly.
 Format brief with (## Executive Summary, ## Econometric Findings & Honesty Labels, ## Distributional Incidence) and appendix with (## Identification & Pre-Registration, ## Robustness Curve & What Would Change My Mind).`,
         JSON.stringify({
           title: scopeOut.runTitle,
@@ -1093,6 +1124,7 @@ Format brief with (## Executive Summary, ## Econometric Findings & Honesty Label
           mcpSpans: mcpSpanDigest,
           estimates: estimateDigest,
           robustness: robustnessDigest,
+          skeptic: skepticOutput,
           literatureEstimates: mcpResult.literatureEstimates,
           dataErrors: mcpResult.dataErrors,
           nodes: nodeList.map((node) => ({
@@ -1102,12 +1134,20 @@ Format brief with (## Executive Summary, ## Econometric Findings & Honesty Label
             title: node.title,
             body: node.body,
             status: node.status,
+            confidence: node.confidence,
             honestyLabel: node.honestyLabel,
           })),
         }),
+        (parsed) => {
+          const rec = asRecord(parsed);
+          if (typeof rec.brief !== "string" || !rec.brief.trim()) {
+            throw new Error("Synthesizer JSON missing brief string");
+          }
+          return rec;
+        },
       ).catch((error) => {
         console.error(
-          "[polinote/crew] synthesizer json failed, using node-ID fallback",
+          "[polinote/crew] synthesizer json failed, using deterministic draft",
           error instanceof Error
             ? redactSecrets(error.message)
             : "synthesizer error",
@@ -1121,9 +1161,13 @@ Format brief with (## Executive Summary, ## Econometric Findings & Honesty Label
   for (const raw of graphOut.nodes) {
     const hit = written.get(raw.key) ?? written.get(slugKey(raw.key));
     if (!hit) continue;
-    const auditedNodeBody = auditGeneratedProseNumbers(hit.body, numericRegistry, {
-      stripUntraced: true,
-    });
+    const auditedNodeBody = auditGeneratedProseNumbers(
+      hit.body,
+      numericRegistry,
+      {
+        stripUntraced: true,
+      },
+    );
     raw.analysisTitle = hit.title;
     raw.analysis = auditedNodeBody.sanitizedText;
     yield { type: "analysis", analysis: hydrateAnalysis(input.runId, raw, web) };
@@ -1131,10 +1175,9 @@ Format brief with (## Executive Summary, ## Econometric Findings & Honesty Label
 
   let auditSummaryText = "Data Auditor: 0 untraced numbers.";
   if (rawSynth) {
-    const parsed = asRecord(rawSynth);
-    const rawBrief = normalizeNodeCitations(asString(parsed.brief, ""), nodeList);
+    const rawBrief = normalizeNodeCitations(asString(rawSynth.brief, ""), nodeList);
     const rawAppendix = normalizeNodeCitations(
-      asString(parsed.appendix, ""),
+      asString(rawSynth.appendix, ""),
       nodeList,
     );
     const briefAudit = auditGeneratedProseNumbers(rawBrief, numericRegistry, {
@@ -1152,7 +1195,7 @@ Format brief with (## Executive Summary, ## Econometric Findings & Honesty Label
     const totalUntraced =
       briefAudit.untracedNumbers.length + appendixAudit.untracedNumbers.length;
 
-    auditSummaryText = `Deterministic Data Auditor checked ${totalChecked} numeric token(s): ${totalMatched} traced to live series/estimates, ${totalUntraced} untraced (${totalUntraced > 0 ? "stripped before publish" : "0 mismatches"}).`;
+    auditSummaryText = `Deterministic Data Auditor checked ${totalChecked} numeric token(s): ${totalMatched} traced to specific series/estimates, ${totalUntraced} untraced (${totalUntraced > 0 ? "stripped before publish" : "0 mismatches"}).`;
 
     if (
       briefAudit.sanitizedText &&
@@ -1185,7 +1228,7 @@ Format brief with (## Executive Summary, ## Econometric Findings & Honesty Label
       id: crypto.randomUUID(),
       kind: "narration",
       agent: "synthesizer",
-      text: `${draft.brief.split("\n\n").slice(0, 2).join("\n\n")}\n\nFull econometric tables, specification curve, and reproducible Jupyter/Quarto notebooks are ready on the Report & Export desk.`,
+      text: `${draft.brief.split("\n\n").slice(0, 2).join("\n\n")}\n\nFull econometric tables, specification curve, and reproducible Jupyter notebooks (${supportedNodes.length} supported claim${supportedNodes.length === 1 ? "" : "s"}) are ready on the Report & Export desk.`,
     },
   };
   yield { type: "draft", brief: draft.brief, appendix: draft.appendix };

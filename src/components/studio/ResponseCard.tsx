@@ -15,6 +15,10 @@ import {
 import { ScopeCard } from "@/components/studio/ScopeCard";
 import { eventNodeId, humanAgent } from "@/lib/ai/event-view";
 import { buildRunEconomicModel } from "@/lib/economics/engine";
+import type {
+  EconometricEstimate,
+  RobustnessBundle,
+} from "@/lib/economics/schemas";
 import {
   NODE_KIND_TAXONOMY,
   NODE_STATUS_TAXONOMY,
@@ -44,6 +48,8 @@ type ResponseCardProps = {
   nodes?: DigressionNode[];
   analyses?: Record<string, NodeAnalysis>;
   scope?: ScopeContract | null;
+  estimates?: EconometricEstimate[];
+  robustness?: RobustnessBundle[];
   finished: boolean;
   onOpenNode: (id: string) => void;
 };
@@ -84,6 +90,8 @@ export function ResponseCard({
   nodes: graphNodes = [],
   analyses = {},
   scope = null,
+  estimates,
+  robustness,
   finished,
   onOpenNode,
 }: ResponseCardProps) {
@@ -115,8 +123,10 @@ export function ResponseCard({
       scope: activeScope,
       nodes: targetNodes,
       fredSeries,
+      storedEstimates: estimates,
+      storedRobustness: robustness,
     });
-  }, [question, activeScope, turnNodes, graphNodes, fredSeries]);
+  }, [question, activeScope, turnNodes, graphNodes, fredSeries, estimates, robustness]);
 
   const leadNarration = narrations[narrations.length - 1];
   const intermediateNarrations =

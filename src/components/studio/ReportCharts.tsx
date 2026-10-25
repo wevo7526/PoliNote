@@ -163,7 +163,10 @@ export function EconomicScorecardBanner({
           </span>
           {scorecard.preRegistrationHash ? (
             <span className="font-mono text-[10px] text-[var(--muted)]">
-              Lock: {scorecard.preRegistrationHash}
+              Lock #{scorecard.preRegistrationHash}
+              {scorecard.preRegistrationLockedAt
+                ? ` · Locked ${new Date(scorecard.preRegistrationLockedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} (pre-fetch)`
+                : ""}
             </span>
           ) : null}
         </div>

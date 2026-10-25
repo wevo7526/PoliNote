@@ -54,58 +54,73 @@ const STOP_WORDS = new Set([
   "analysis",
   "impact",
   "impacts",
+  "did",
+  "increase",
+  "decrease",
+  "affect",
+  "act",
+  "and",
+  "for",
 ]);
 
 /**
- * Derives observation_start and observation_end from the Scope Contract or question.
- * Default rule: at least 5 years pre-policy through the latest available date.
- * Never uses "last N points".
+ * Derives observation_start and observation_end from the explicit Scope Contract policyDate
+ * or explicit dates in the text.
+ * Rule: at least 6 years pre-policy through the latest available date.
+ * Never uses "last N points" or hard-coded topic pins.
  */
 export function deriveObservationWindow(input: {
   question: string;
   horizon?: string;
-  policyDate?: string;
+  policyDate?: string | null;
 }): {
   policyDate: string | null;
   observationStart: string;
   observationEnd: string;
   rationale: string;
 } {
-  const combined = `${input.policyDate ?? ""} ${input.horizon ?? ""} ${input.question}`;
   const currentYear = new Date().getFullYear();
   const todayIso = new Date().toISOString().slice(0, 10);
 
-  // Extract explicit policy year (e.g., 2017 TCJA, 2018 tariffs, 2022 IRA)
+  if (input.policyDate && /^\d{4}-\d{2}-\d{2}$/.test(input.policyDate.trim())) {
+    const cleanDate = input.policyDate.trim();
+    const y = Number.parseInt(cleanDate.slice(0, 4), 10);
+    const startYear = Math.min(y - 6, currentYear - 10);
+    return {
+      policyDate: cleanDate,
+      observationStart: `${startYear}-01-01`,
+      observationEnd: todayIso,
+      rationale: `6 years pre-policy (${startYear}-01-01) around Scope policy date ${cleanDate} through latest available (${todayIso}).`,
+    };
+  }
+
+  const combined = `${input.horizon ?? ""} ${input.question}`;
+  const isoDateMatch = combined.match(/\b(19[7-9]\d|20[0-2]\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/);
+  if (isoDateMatch?.[0]) {
+    const cleanDate = isoDateMatch[0];
+    const y = Number.parseInt(cleanDate.slice(0, 4), 10);
+    const startYear = Math.min(y - 6, currentYear - 10);
+    return {
+      policyDate: cleanDate,
+      observationStart: `${startYear}-01-01`,
+      observationEnd: todayIso,
+      rationale: `6 years pre-policy (${startYear}-01-01) around explicit date ${cleanDate} through latest available (${todayIso}).`,
+    };
+  }
+
   const yearMatches = [...combined.matchAll(/\b(19[7-9]\d|20[0-2]\d)\b/g)]
     .map((m) => Number.parseInt(m[1]!, 10))
     .filter((y) => y >= 1970 && y <= currentYear);
 
-  let policyYear: number | null = null;
-  if (input.policyDate && /^\d{4}-\d{2}-\d{2}$/.test(input.policyDate.trim())) {
-    const y = Number.parseInt(input.policyDate.trim().slice(0, 4), 10);
-    const startYear = Math.min(y - 6, currentYear - 10);
-    return {
-      policyDate: input.policyDate.trim(),
-      observationStart: `${startYear}-01-01`,
-      observationEnd: todayIso,
-      rationale: `6 years pre-policy (${startYear}-01-01) around policy date ${input.policyDate.trim()} through latest available (${todayIso}).`,
-    };
-  }
-
-  if (/tcja|tax cuts and jobs act/i.test(combined)) {
-    policyYear = 2018;
-  } else if (yearMatches.length > 0) {
-    policyYear = Math.min(...yearMatches);
-  }
-
-  if (policyYear) {
+  if (yearMatches.length > 0) {
+    const policyYear = Math.min(...yearMatches);
     const startYear = Math.min(policyYear - 6, currentYear - 10);
     const policyDate = `${policyYear}-01-01`;
     return {
       policyDate,
       observationStart: `${startYear}-01-01`,
       observationEnd: todayIso,
-      rationale: `At least 5–6 years pre-policy (${startYear}-01-01, policy date ${policyDate}) through latest available date (${todayIso}).`,
+      rationale: `At least 6 years pre-policy (${startYear}-01-01, policy date ${policyDate}) through latest available date (${todayIso}).`,
     };
   }
 
@@ -114,34 +129,21 @@ export function deriveObservationWindow(input: {
     policyDate: null,
     observationStart: `${defaultStartYear}-01-01`,
     observationEnd: todayIso,
-    rationale: `12-year empirical window (${defaultStartYear}-01-01 through latest available ${todayIso}).`,
+    rationale: `No explicit policy date found; using 12-year empirical window (${defaultStartYear}-01-01 through ${todayIso}).`,
   };
 }
 
+/**
+ * Tokenizes raw text into a provider search query without any hardcoded topic rewrites.
+ */
 export function buildProviderSearchQuery(rawText: string): string {
-  const lower = rawText.toLowerCase();
-  if (/tcja|tax cuts and jobs act|corporate tax|business investment|nonresidential/i.test(lower)) {
-    return "real private nonresidential fixed investment";
-  }
-  if (/minimum wage/i.test(lower)) {
-    return "unemployment rate leisure hospitality earnings";
-  }
-  if (/tariff|import price|customs duty/i.test(lower)) {
-    return "imports goods services consumer price index";
-  }
-  if (/monetary policy|federal funds|volcker|interest rate/i.test(lower)) {
-    return "federal funds effective rate consumer price index";
-  }
-  if (/housing|upzon|zoning|rent|multifamily/i.test(lower)) {
-    return "housing units started rent primary residence";
-  }
-
-  const tokens = lower
+  const tokens = rawText
+    .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+    .filter((w) => w.length >= 3 && !/^\d+$/.test(w) && !STOP_WORDS.has(w));
   const unique = tokens.filter((w, i) => tokens.indexOf(w) === i);
-  return unique.slice(0, 5).join(" ") || rawText.trim().slice(0, 60);
+  return unique.slice(0, 6).join(" ") || rawText.trim().slice(0, 60);
 }
 
 /**
@@ -187,9 +189,14 @@ export function validateCandidateMetadata(
     }
   }
 
-  if (/seasonally adjusted/i.test(meta.seasonalAdjustment) && !/not seasonally/i.test(meta.seasonalAdjustment)) {
+  if (
+    /seasonally adjusted/i.test(meta.seasonalAdjustment) &&
+    !/not seasonally/i.test(meta.seasonalAdjustment)
+  ) {
     score += 15;
-    reasons.push(`Seasonally adjusted (${meta.seasonalAdjustmentShort || meta.seasonalAdjustment}).`);
+    reasons.push(
+      `Seasonally adjusted (${meta.seasonalAdjustmentShort || meta.seasonalAdjustment}).`,
+    );
   }
 
   if (meta.frequencyShort === "m" || meta.frequencyShort === "q") {
@@ -217,7 +224,7 @@ export function validateCandidateMetadata(
 export async function selectAndValidateLiveSeries(input: {
   question: string;
   horizon?: string;
-  policyDate?: string;
+  policyDate?: string | null;
   extraQueries?: string[];
   maxSelected?: number;
 }): Promise<SeriesSelectionReport> {
@@ -263,16 +270,20 @@ export async function selectAndValidateLiveSeries(input: {
     });
   }
 
-  // Also search World Bank if cross-country or if FRED returned no candidates
   const wbProvider = listDataProviders().find((p) => p.id === "worldbank");
-  if (wbProvider && (rawCandidates.length === 0 || /country|oecd|global|world|cbam|tariff/i.test(input.question))) {
+  if (
+    wbProvider &&
+    (rawCandidates.length === 0 ||
+      /country|oecd|global|world|cbam|tariff/i.test(input.question))
+  ) {
     try {
       const wbHits = await wbProvider.search(primaryQuery, 5);
       rawCandidates.push(...wbHits);
     } catch (error) {
       providerErrors.push({
         provider: "worldbank",
-        message: error instanceof Error ? error.message : "World Bank search failed",
+        message:
+          error instanceof Error ? error.message : "World Bank search failed",
       });
     }
   }

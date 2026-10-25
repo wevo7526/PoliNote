@@ -9,6 +9,15 @@ export const CURRENT_CODE_VERSION =
   process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
   "local-v2";
 
+export const PINNED_PYTHON_PACKAGES = [
+  "numpy==1.26.4",
+  "pandas==2.2.2",
+  "scipy==1.13.1",
+  "statsmodels==0.14.2",
+  "linearmodels==6.0",
+  "requests==2.32.3",
+] as const;
+
 function slugify(title: string): string {
   return (
     title
@@ -24,6 +33,7 @@ function triggerBrowserDownload(
   content: string,
   mimeType: string,
 ): void {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -36,39 +46,40 @@ function triggerBrowserDownload(
 }
 
 /**
- * Exports all live series observations and full provenance metadata as a CSV bundle.
+ * Builds the CSV bundle string from the run's exact specification and live series.
+ * Refuses to generate when no econometric estimate or live series exists.
  */
-export function downloadCsvBundle(input: {
+export function buildCsvBundleContent(input: {
   title: string;
   seriesList: ExtractedSeries[];
   econModel: RunEconomicModel;
-}): void {
+}): string {
+  const est = input.econModel.headlineEstimate;
+  if (!est || input.seriesList.length === 0) {
+    throw new Error(
+      "Cannot export CSV data bundle: no live econometric estimate exists on this run.",
+    );
+  }
+
   const lines: string[] = [
     "# PoliNote Reproducible Econometric Data & Provenance Bundle",
     `# Run Title: ${input.title.replace(/[\r\n]+/g, " ")}`,
     `# Exported At: ${new Date().toISOString()}`,
     `# Code Version: ${CURRENT_CODE_VERSION} | Prompt Version: ${CURRENT_PROMPT_VERSION}`,
-  ];
-
-  if (input.econModel.headlineEstimate) {
-    const est = input.econModel.headlineEstimate;
-    lines.push(
-      `# Pre-Registration Lock Hash: ${est.spec.preRegistration.lockHash}`,
-      `# Headline Method: ${est.methodLabel} (${est.honestyLabel})`,
-      `# Point Estimate: ${est.pointEstimate} | SE: ${est.standardError} | 95% CI: [${est.ciLower}, ${est.ciUpper}] | p-value: ${est.pValue} | N: ${est.sampleSize}`,
-    );
-  }
-
-  lines.push(
+    `# Pre-Registration Lock Hash: ${est.spec.preRegistration.lockHash} (locked at ${est.spec.preRegistration.lockedAt})`,
+    `# Headline Method: ${est.methodLabel} (${est.honestyLabel})`,
+    `# Specification Formula: ${est.spec.formula}`,
+    `# Outcome Series: ${est.spec.outcomeSeriesId} | Transform: ${est.spec.transform} | Policy Date: ${est.spec.policyDate ?? "none"} | HAC Lags: ${est.spec.hacLags}`,
+    `# Point Estimate: ${est.pointEstimate} | SE: ${est.standardError} | 95% CI: [${est.ciLower}, ${est.ciUpper}] | p-value: ${est.pValue} | N: ${est.sampleSize}`,
     "",
     "series_id,date,value,units,source,vintage_date,transform,seasonal_adjustment,snapshot_sha256,source_url",
-  );
+  ];
 
   for (const s of input.seriesList) {
     const prov = s.provenance;
     const source = prov?.source ?? "fred";
     const vintage = prov?.vintageDate ?? s.vintage ?? "latest";
-    const transform = (prov?.transform ?? "lin").replace(/,/g, ";");
+    const transform = (prov?.transform ?? est.spec.transform).replace(/,/g, ";");
     const sa = (prov?.seasonalAdjustment ?? "Reported").replace(/,/g, ";");
     const sha = prov?.payloadSha256 ?? s.resultHash ?? "";
     const url = prov?.url ?? s.url ?? "";
@@ -81,21 +92,28 @@ export function downloadCsvBundle(input: {
     }
   }
 
+  return lines.join("\n");
+}
+
+export function downloadCsvBundle(input: {
+  title: string;
+  seriesList: ExtractedSeries[];
+  econModel: RunEconomicModel;
+}): void {
+  const csv = buildCsvBundleContent(input);
   triggerBrowserDownload(
     `${slugify(input.title)}-data-bundle.csv`,
-    lines.join("\n"),
+    csv,
     "text/csv;charset=utf-8",
   );
 }
 
 /**
- * Generates and downloads a runnable Jupyter Notebook (.ipynb) that:
- * 1. Embeds the locked pre-registration specification and the exact snapshot SHA-256 & values used in the run.
- * 2. Re-pulls live data from the FRED API using `requests` / `pandas`.
- * 3. Compares the live pull against the embedded snapshot and prints a revision diff if any observations were revised.
- * 4. Reproduces the Newey-West HAC pre/post regression, Event Study leads/lags, and Jordà Local Projections using `statsmodels`.
+ * Builds the runnable Jupyter Notebook (.ipynb) JSON object embedding the run's exact
+ * specification, pre-registration lock, pinned library versions, and SHA-256 snapshot.
+ * Refuses to generate when no econometric estimate exists (zero default series or dates).
  */
-export function downloadJupyterNotebook(input: {
+export function buildJupyterNotebookObject(input: {
   runId: string;
   title: string;
   scope: ScopeContract | null;
@@ -103,39 +121,52 @@ export function downloadJupyterNotebook(input: {
   econModel: RunEconomicModel;
   nodes: DigressionNode[];
   bibliography: BibliographyEntry[];
-}): void {
-  const leadSeries = input.seriesList[0];
+}): Record<string, unknown> {
   const est = input.econModel.headlineEstimate;
-  const seriesId = est?.spec.outcomeSeriesId ?? leadSeries?.seriesId ?? "GDPC1";
-  const policyDate = est?.spec.policyDate ?? "2018-01-01";
-  const windowStart = est?.sampleWindow.start ?? leadSeries?.points[0]?.date ?? "2012-01-01";
-  const windowEnd =
-    est?.sampleWindow.end ??
-    leadSeries?.points[leadSeries.points.length - 1]?.date ??
-    new Date().toISOString().slice(0, 10);
-  const lockHash = est?.spec.preRegistration.lockHash ?? "unregistered";
+  if (!est || input.seriesList.length === 0) {
+    throw new Error(
+      "Cannot export Jupyter Notebook: no live econometric estimate exists on this run.",
+    );
+  }
+
+  const leadSeries =
+    input.seriesList.find((s) => s.seriesId === est.spec.outcomeSeriesId) ??
+    input.seriesList[0]!;
+  const seriesId = est.spec.outcomeSeriesId;
+  const policyDate = est.spec.policyDate;
+  const windowStart = est.sampleWindow.start;
+  const windowEnd = est.sampleWindow.end;
+  const transform = est.spec.transform;
+  const hacLags = est.spec.hacLags;
+  const lpHorizons = est.spec.lpHorizons;
+  const lockHash = est.spec.preRegistration.lockHash;
+  const lockedAt = est.spec.preRegistration.lockedAt;
   const snapshotSha =
-    est?.provenance.payloadSha256 ?? leadSeries?.resultHash ?? "none";
-  const embeddedSnapshot = leadSeries?.points ?? [];
+    est.provenance.payloadSha256 || leadSeries.resultHash || "";
+  const embeddedSnapshot = leadSeries.points;
 
   const mdHeader = [
     `# PoliNote Reproducible Econometric Notebook: ${input.title}`,
     "",
     `- **Run ID:** \`${input.runId}\``,
-    `- **Pre-Registration Lock Hash:** \`${lockHash}\``,
+    `- **Pre-Registration Lock Hash:** \`${lockHash}\` (Locked at \`${lockedAt}\` prior to observation fetch)`,
     `- **Snapshot SHA-256:** \`${snapshotSha}\``,
     `- **Code Version:** \`${CURRENT_CODE_VERSION}\` · **Prompt Version:** \`${CURRENT_PROMPT_VERSION}\``,
-    `- **Primary Series:** \`${seriesId}\` (${windowStart} to ${windowEnd}, Policy Date: \`${policyDate}\`)`,
-    `- **Honesty Label:** ${est?.honestyLabel ?? "Descriptive"}`,
+    `- **Pinned Python Dependencies:** \`${PINNED_PYTHON_PACKAGES.join(" ")}\``,
+    `- **Primary Series:** \`${seriesId}\` (${windowStart} to ${windowEnd}, Transform: \`${transform}\`, HAC Lags: \`${hacLags}\`, Policy Date: \`${policyDate ?? "none"}\`)`,
+    `- **Method & Honesty Label:** ${est.methodLabel} — **${est.honestyLabel}**`,
+    ...(est.relabelReason ? [`- **Honesty Relabel Note:** ${est.relabelReason}`] : []),
     "",
     "### Scope Contract",
     `- **Question:** ${input.scope?.question ?? input.title}`,
     `- **Instrument:** ${input.scope?.instrument ?? "See run scope"}`,
     `- **Target:** ${input.scope?.target ?? seriesId}`,
-    `- **Identification Strategy:** ${input.scope?.identificationStrategy ?? est?.methodLabel ?? "Event Study + Jordà Local Projections"}`,
+    `- **Policy Date Source:** ${input.scope?.policyDateSource ?? "See scope contract"}`,
+    `- **Identification Strategy:** ${input.scope?.identificationStrategy ?? est.methodLabel}`,
   ].join("\n");
 
   const pyCodeSetup = [
+    `# Pinned environment: pip install ${PINNED_PYTHON_PACKAGES.join(" ")}`,
     "import os",
     "import hashlib",
     "import json",
@@ -149,7 +180,11 @@ export function downloadJupyterNotebook(input: {
     `WINDOW_START = ${JSON.stringify(windowStart)}`,
     `WINDOW_END = ${JSON.stringify(windowEnd)}`,
     `POLICY_DATE = ${JSON.stringify(policyDate)}`,
+    `TRANSFORM = ${JSON.stringify(transform)}`,
+    `HAC_LAGS = ${hacLags}`,
+    `LP_HORIZONS = ${lpHorizons}`,
     `PRE_REGISTRATION_HASH = ${JSON.stringify(lockHash)}`,
+    `PRE_REGISTRATION_LOCKED_AT = ${JSON.stringify(lockedAt)}`,
     `RUN_SNAPSHOT_SHA256 = ${JSON.stringify(snapshotSha)}`,
     "",
     "# Embedded run-time snapshot for audit & revision diffing (never used as a silent fallback)",
@@ -189,25 +224,34 @@ export function downloadJupyterNotebook(input: {
   ].join("\n");
 
   const pyCodeEstimate = [
-    "# Reproduce Headline Pre/Post & Event-Study Regression with Newey-West HAC SEs",
+    "# Reproduce Headline Specification with Newey-West HAC SEs",
     "df = df_live.copy()",
     "df['date_dt'] = pd.to_datetime(df['date'])",
     "df = df.sort_values('date_dt').reset_index(drop=True)",
+    "if TRANSFORM == 'log':",
+    "    df = df[df['value'] > 0].copy()",
+    "    df['value'] = np.log(df['value'])",
+    "elif TRANSFORM == 'diff':",
+    "    df['value'] = df['value'].pct_change() * 100.0",
+    "    df = df.dropna().reset_index(drop=True)",
+    "",
+    "if not POLICY_DATE:",
+    "    raise RuntimeError('Policy date is required for pre/post estimation.')",
     "split_idx = df[df['date'] >= POLICY_DATE].index.min()",
     "if pd.isna(split_idx):",
-    "    split_idx = len(df) // 2",
+    "    raise RuntimeError(f'Policy date {POLICY_DATE} is outside series window.')",
     "",
     "df['post'] = (df.index >= split_idx).astype(float)",
     "df['trend'] = np.arange(len(df), dtype=float) - float(split_idx)",
     "df['post_trend'] = df['post'] * df['trend']",
     "",
     "X = sm.add_constant(df[['post', 'trend', 'post_trend']])",
-    "model = sm.OLS(df['value'], X).fit(cov_type='HAC', cov_kwds={'maxlags': 4})",
+    "model = sm.OLS(df['value'], X).fit(cov_type='HAC', cov_kwds={'maxlags': HAC_LAGS})",
     "print(model.summary())",
     "",
-    "# Jordà Local Projections (h = 0..8)",
+    "# Jordà Local Projections (h = 0..LP_HORIZONS)",
     "lp_rows = []",
-    "for h in range(0, min(9, len(df) // 3)):",
+    "for h in range(0, min(LP_HORIZONS + 1, len(df) // 3)):",
     "    yh = df['value'].shift(-h) - df['value'].shift(1)",
     "    lag_dy = df['value'].diff(1).shift(1)",
     "    valid = pd.concat([yh.rename('yh'), df['post'], lag_dy.rename('lag_dy')], axis=1).dropna()",
@@ -219,7 +263,7 @@ export function downloadJupyterNotebook(input: {
     "display(df_lp)",
   ].join("\n");
 
-  const notebook = {
+  return {
     nbformat: 4,
     nbformat_minor: 5,
     metadata: {
@@ -235,9 +279,11 @@ export function downloadJupyterNotebook(input: {
       polinote: {
         runId: input.runId,
         preRegistrationHash: lockHash,
+        preRegistrationLockedAt: lockedAt,
         snapshotSha256: snapshotSha,
         codeVersion: CURRENT_CODE_VERSION,
         promptVersion: CURRENT_PROMPT_VERSION,
+        pinnedPackages: PINNED_PYTHON_PACKAGES,
       },
     },
     cells: [
@@ -269,7 +315,18 @@ export function downloadJupyterNotebook(input: {
       },
     ],
   };
+}
 
+export function downloadJupyterNotebook(input: {
+  runId: string;
+  title: string;
+  scope: ScopeContract | null;
+  seriesList: ExtractedSeries[];
+  econModel: RunEconomicModel;
+  nodes: DigressionNode[];
+  bibliography: BibliographyEntry[];
+}): void {
+  const notebook = buildJupyterNotebookObject(input);
   triggerBrowserDownload(
     `${slugify(input.title)}-reproduce.ipynb`,
     JSON.stringify(notebook, null, 2),

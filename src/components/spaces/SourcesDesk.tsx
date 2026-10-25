@@ -28,6 +28,9 @@ export function SourcesDesk() {
     scope: snapshot?.scope ?? null,
     nodes: snapshot?.nodes ?? [],
     fredSeries,
+    storedEstimates: snapshot?.estimates,
+    storedRobustness: snapshot?.robustness,
+    preRegistrationLock: snapshot?.preRegistrationLock,
   });
 
   const spans = (snapshot?.nodes ?? []).flatMap((node) =>
@@ -99,7 +102,7 @@ export function SourcesDesk() {
                 Real-Time Vintage (ALFRED)
               </button>
             </div>
-            {fredSeries.length > 0 ? (
+            {fredSeries.length > 0 && econModel.headlineEstimate ? (
               <button
                 type="button"
                 className="composer-send"

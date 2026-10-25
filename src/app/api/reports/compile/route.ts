@@ -1,13 +1,21 @@
 import { NextResponse } from "next/server";
 import { generateText } from "ai";
 import { hasAiCredentials, resolveAiModel } from "@/lib/ai/crew";
-import { redactSecrets } from "@/lib/mcp/http";
 import {
   collectBibliography,
   extractFredSeries,
 } from "@/components/studio/ReportCharts";
 import { getProject } from "@/lib/db/projects";
-import { getRun, listRuns, persistTurn } from "@/lib/db/runs";
+import { getRun, listRuns } from "@/lib/db/runs";
+import {
+  auditGeneratedProseNumbers,
+  buildAllowedNumericRegistry,
+} from "@/lib/economics/auditor";
+import type {
+  EconometricEstimate,
+  RobustnessBundle,
+} from "@/lib/economics/schemas";
+import { toTypedApiError } from "@/lib/env";
 import type { CompiledPolicyReport } from "@/lib/reports/report-types";
 import { getSessionUserId } from "@/lib/session";
 import {
@@ -25,6 +33,88 @@ export const maxDuration = 120;
 const DEFAULT_MODEL = "gpt-5.6-sol";
 const FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-4.1"];
 
+export function auditCompiledPolicyReport(
+  report: CompiledPolicyReport,
+  input: {
+    fredSeries: ReturnType<typeof extractFredSeries>;
+    estimates?: EconometricEstimate[];
+    robustness?: RobustnessBundle[];
+  },
+): CompiledPolicyReport {
+  const bundles = input.fredSeries
+    .filter((s) => s.points.length > 0)
+    .map((s) => ({
+      metadata: {
+        provider: "fred" as const,
+        id: s.seriesId,
+        title: s.title,
+        units: s.units,
+        frequency: "Reported",
+        frequencyShort: "unknown" as const,
+        seasonalAdjustment: "Reported",
+        observationStart: s.points[0]!.date,
+        observationEnd: s.points[s.points.length - 1]!.date,
+        lastUpdated: s.points[s.points.length - 1]!.date,
+        discontinued: false,
+        copyrightedThirdParty: false,
+        licenseAttribution: "FRED",
+        sourceUrl: s.url || `https://fred.stlouisfed.org/series/${s.seriesId}`,
+      },
+      observations: s.points,
+      provenance: {
+        source: "fred" as const,
+        seriesId: s.seriesId,
+        title: s.title,
+        units: s.units || "Units",
+        transform: "lin",
+        seasonalAdjustment: "Reported",
+        frequency: "Reported",
+        observationWindow: {
+          start: s.points[0]!.date,
+          end: s.points[s.points.length - 1]!.date,
+        },
+        lastUpdated: s.points[s.points.length - 1]!.date,
+        retrievedAt: new Date().toISOString(),
+        url: s.url || `https://fred.stlouisfed.org/series/${s.seriesId}`,
+        licenseAttribution: "FRED",
+        copyrightedThirdParty: false,
+        payloadSha256: s.resultHash || "00000000000000000000000000000000",
+      },
+      snapshot: {
+        id: `snap_${s.seriesId}`,
+        provider: "fred" as const,
+        seriesId: s.seriesId,
+        requestUrl: s.url || "",
+        retrievedAt: new Date().toISOString(),
+        sha256: s.resultHash || "00000000000000000000000000000000",
+        byteLength: s.points.length * 16,
+        rawJson: "[]",
+      },
+    }));
+
+  const registry = buildAllowedNumericRegistry({
+    bundles,
+    estimates: input.estimates,
+    robustness: input.robustness,
+  });
+
+  const auditField = (text: string) =>
+    auditGeneratedProseNumbers(text, registry, { stripUntraced: true })
+      .sanitizedText;
+
+  return {
+    ...report,
+    executiveSummary: auditField(report.executiveSummary),
+    spineNarrative: auditField(report.spineNarrative),
+    methodologyAndTrace: auditField(report.methodologyAndTrace),
+    risksAndCounterfactuals: auditField(report.risksAndCounterfactuals),
+    keyFindings: report.keyFindings.map((kf) => ({
+      ...kf,
+      detail: auditField(kf.detail),
+    })),
+  };
+}
+
 function buildDeterministicReport(input: {
   title: string;
   projectTitle: string;
@@ -39,7 +129,8 @@ function buildDeterministicReport(input: {
   const bib = collectBibliography(activeNodes, input.analyses);
 
   const claimNodes = activeNodes.filter(
-    (n) => n.kind === "claim" || n.kind === "mechanism" || n.kind === "constraint",
+    (n) =>
+      n.kind === "claim" || n.kind === "mechanism" || n.kind === "constraint",
   );
   const incidenceNodes = activeNodes.filter(
     (n) => n.kind === "incidence" || n.kind === "claim",
@@ -65,39 +156,35 @@ function buildDeterministicReport(input: {
     {
       figureLabel: "Figure 1",
       title: "Policy Argument Map & Spine Verification Coverage",
-      caption: `${supportedNodes.length} of ${activeNodes.length} active nodes are verified by empirical MCP spans across the 5 policy spine stages and digression branches.`,
+      caption: `${supportedNodes.length} of ${activeNodes.length} active nodes are supported by econometric estimates across the policy spine stages and digression branches.`,
       interpretation:
         supportedNodes.length > 0
-          ? `Empirical verification is strongest where FRED series, OpenAlex studies, or statutory text directly corroborate the spine (${supportedNodes.map((n) => n.title).join("; ")}).`
-          : "Nodes currently stand as working hypotheses or contested claims awaiting additional empirical spans.",
+          ? `Econometric support is established on (${supportedNodes.map((n) => n.title).join("; ")}).`
+          : "Nodes currently stand as proposed, inconclusive, or unverifiable awaiting live series estimation.",
     },
     ...fredSeries.map((s, idx) => {
       const first = s.points[0];
       const last = s.points[s.points.length - 1];
-      const delta =
-        first && last && first.value !== 0
-          ? (((last.value - first.value) / Math.abs(first.value)) * 100).toFixed(1)
-          : "0.0";
       return {
         figureLabel: `Figure ${idx + 2}`,
-        title: `FRED ${s.seriesId}: ${s.title}`,
-        caption: `Official St. Louis Fed time series (${s.units || "Index"}), observed from ${first?.date ?? "start"} (${first?.value ?? "—"}) to ${last?.date ?? "latest"} (${last?.value ?? "—"}).`,
-        interpretation: `Over the ${s.points.length}-period window, ${s.seriesId} moved by ${Number(delta) >= 0 ? `+${delta}%` : `${delta}%`}, anchoring the empirical benchmark for “${s.nodeTitle}”.`,
+        title: `Live Series ${s.seriesId}: ${s.title}`,
+        caption: `Official provider time series (${s.units || "Units"}), observed from ${first?.date ?? "start"} (${first?.value ?? "—"}) to ${last?.date ?? "latest"} (${last?.value ?? "—"}).`,
+        interpretation: `Anchors the empirical benchmark for “${s.nodeTitle}”.`,
       };
     }),
   ];
 
-  const incidenceRows = (incidenceNodes.length > 0 ? incidenceNodes : activeNodes.slice(0, 4)).map(
-    (node) => ({
-      group: node.title,
-      direction:
-        node.kind === "incidence"
-          ? "Distributional Split"
-          : NODE_KIND_TAXONOMY[node.kind].shortLabel,
-      mechanism: node.body,
-      status: NODE_STATUS_TAXONOMY[node.status].shortLabel,
-    }),
-  );
+  const incidenceRows = (
+    incidenceNodes.length > 0 ? incidenceNodes : activeNodes.slice(0, 4)
+  ).map((node) => ({
+    group: node.title,
+    direction:
+      node.kind === "incidence"
+        ? "Distributional Split"
+        : NODE_KIND_TAXONOMY[node.kind].shortLabel,
+    mechanism: node.body,
+    status: NODE_STATUS_TAXONOMY[node.status].shortLabel,
+  }));
 
   return {
     title: input.title,
@@ -110,9 +197,9 @@ function buildDeterministicReport(input: {
       `This policy report evaluates: ${input.question}`,
       input.scope?.objective
         ? input.scope.objective
-        : `The crew mapped ${activeNodes.length} structured argument nodes across the 5-stage policy spine (Policy Rule, Economic Mechanism, Core Finding, Empirical Data, and Distributional Impact), backed by ${bib.length} verified reference(s) and ${fredSeries.length} FRED economic time-series chart(s).`,
+        : `The crew mapped ${activeNodes.length} structured argument nodes backed by ${bib.length} verified reference(s) and ${fredSeries.length} live series.`,
       supportedNodes.length > 0
-        ? `Key verified conclusions include: ${supportedNodes.map((n) => `${n.title} (${n.body})`).join(" ")}`
+        ? `Supported conclusions include: ${supportedNodes.map((n) => `${n.title} (${n.body})`).join(" ")}`
         : `Core hypotheses on the map include: ${activeNodes.slice(0, 3).map((n) => `${n.title} (${n.body})`).join(" ")}`,
     ].join("\n\n"),
     keyFindings,
@@ -120,7 +207,8 @@ function buildDeterministicReport(input: {
       .map(
         (node) =>
           `## ${NODE_KIND_TAXONOMY[node.kind].stage} — ${node.title} (${NODE_STATUS_TAXONOMY[node.status].shortLabel})\n${
-            input.analyses[node.id]?.body.replace(/^##\s+/gm, "### ") || node.body
+            input.analyses[node.id]?.body.replace(/^##\s+/gm, "### ") ||
+            node.body
           }`,
       )
       .join("\n\n"),
@@ -128,9 +216,9 @@ function buildDeterministicReport(input: {
     incidenceRows,
     methodologyAndTrace: [
       `## How This Output Was Made (Provenance & Methodology)`,
-      `1. **Scope Contract Locked**: ${input.scope?.instrument || "Defined policy instrument, target benchmark, identification strategy, and horizon."}`,
-      `2. **Identification Strategy**: ${input.scope?.identificationStrategy || "Evaluated causal pathways using quasi-experimental and time-series benchmarks while filtering out non-causal confounders."}`,
-      `3. **Empirical MCP Spans Attached**: Pulled ${fredSeries.length} FRED macroeconomic/sector series and ${bib.length} total bibliography sources. Only nodes with hashed MCP spans graduate to Verified status.`,
+      `1. **Scope Contract & Pre-Registration Locked**: ${input.scope?.instrument || "Defined policy instrument, target benchmark, identification strategy, and horizon."}`,
+      `2. **Identification Strategy**: ${input.scope?.identificationStrategy || "Evaluated pathways using pre-registered econometric estimators and robustness specifications."}`,
+      `3. **Empirical Spans & Data Auditor**: Pulled ${fredSeries.length} live series and ${bib.length} bibliography sources. Every number in this report passed the deterministic Data Auditor.`,
     ].join("\n\n"),
     risksAndCounterfactuals:
       branchNodes.length > 0
@@ -141,7 +229,7 @@ function buildDeterministicReport(input: {
             )
             .join("\n")
         : input.scope?.baseline ||
-          "No-policy baseline continuation and identification risks remain bounded by the Scope Contract.",
+          "Counterfactual baselines and identification risks remain bounded by the Scope Contract.",
   };
 }
 
@@ -152,7 +240,10 @@ function tryExtractJson(rawText: string): Record<string, unknown> | null {
   const end = candidate.lastIndexOf("}");
   if (start === -1 || end <= start) return null;
   try {
-    return JSON.parse(candidate.slice(start, end + 1)) as Record<string, unknown>;
+    return JSON.parse(candidate.slice(start, end + 1)) as Record<
+      string,
+      unknown
+    >;
   } catch {
     return null;
   }
@@ -176,6 +267,8 @@ export async function POST(request: Request) {
     let scope: ScopeContract | null = null;
     let nodes: DigressionNode[] = [];
     let analyses: Record<string, NodeAnalysis> = {};
+    let storedEstimates: EconometricEstimate[] = [];
+    let storedRobustness: RobustnessBundle[] = [];
 
     if (runId) {
       const snap = await getRun(userId, runId);
@@ -194,10 +287,15 @@ export async function POST(request: Request) {
       scope = snap.scope;
       nodes = snap.nodes;
       analyses = snap.analyses;
+      storedEstimates = snap.estimates ?? [];
+      storedRobustness = snap.robustness ?? [];
     } else if (projectId) {
       const proj = await getProject(userId, projectId);
       if (!proj) {
-        return NextResponse.json({ error: "Project not found" }, { status: 404 });
+        return NextResponse.json(
+          { error: "Project not found" },
+          { status: 404 },
+        );
       }
       projectTitle = proj.title;
       title = `${proj.title} — Master Policy Report`;
@@ -212,6 +310,8 @@ export async function POST(request: Request) {
         if (!scope && s.scope) scope = s.scope;
         nodes.push(...s.nodes);
         Object.assign(analyses, s.analyses);
+        if (s.estimates) storedEstimates.push(...s.estimates);
+        if (s.robustness) storedRobustness.push(...s.robustness);
       }
     } else {
       return NextResponse.json(
@@ -229,6 +329,8 @@ export async function POST(request: Request) {
       analyses,
     });
 
+    const fredSeries = extractFredSeries(nodes);
+
     if (hasAiCredentials() && nodes.length > 0) {
       const preferred =
         process.env.OPENAI_MODEL?.trim() ||
@@ -237,7 +339,6 @@ export async function POST(request: Request) {
       const models = [preferred, ...FALLBACK_MODELS].filter(
         (m, i, a) => m.length > 0 && a.indexOf(m) === i,
       );
-      const fredSeries = extractFredSeries(nodes);
       const bib = collectBibliography(nodes, analyses);
 
       for (const modelId of models) {
@@ -250,16 +351,16 @@ export async function POST(request: Request) {
                 reasoningSummary: null,
               },
             },
-            system: `You are PoliNote's Chief Economist & Report Compiler.
-Compile the provided policy graph nodes, empirical FRED time-series charts, and bibliography into a clear, authoritative executive report JSON object:
+            system: `You are PoliNote's Report Compiler.
+Compile the provided policy graph nodes, stored econometric estimates, and bibliography into an executive report JSON object:
 {
   "subtitle": "1-line jurisdiction, instrument & horizon subtitle",
-  "executiveSummary": "2-3 lucid paragraphs synthesizing the core conclusion, empirical FRED numbers, and policy tradeoffs. No raw UUIDs.",
-  "spineNarrative": "Structured narrative with ## headings walking through 01 Policy Rule, 02 Economic Mechanism, 03 Core Finding, 04 Empirical Data, and 05 Distributional Impact.",
-  "methodologyAndTrace": "Clear explanation of how this output was made: Scope Contract boundaries, identification strategy, MCP data sources queried, and Critic audit.",
-  "risksAndCounterfactuals": "Synthesis of counterfactual baselines, policy design forks, and key identification risks."
+  "executiveSummary": "2-3 paragraphs synthesizing the core conclusion, honesty labels, and policy tradeoffs. Cite ONLY exact numbers present in the provided estimates or fredSeries.",
+  "spineNarrative": "Structured narrative with ## headings walking through 01 Policy Rule, 02 Mechanism, 03 Core Finding, 04 Empirical Proof, and 05 Distributional Impact.",
+  "methodologyAndTrace": "Explanation of Scope Contract boundaries, pre-registration lock, identification strategy, and Skeptic audit.",
+  "risksAndCounterfactuals": "Synthesis of counterfactual baselines, specification forks, and key identification risks."
 }
-Return ONLY valid JSON.`,
+Never invent or guess any numbers. Return ONLY valid JSON.`,
             prompt: JSON.stringify({
               title,
               question,
@@ -267,6 +368,8 @@ Return ONLY valid JSON.`,
                 ? {
                     jurisdiction: scope.jurisdiction,
                     horizon: scope.horizon,
+                    policyDate: scope.policyDate,
+                    policyDateSource: scope.policyDateSource,
                     instrument: scope.instrument,
                     target: scope.target,
                     identificationStrategy: scope.identificationStrategy,
@@ -274,9 +377,21 @@ Return ONLY valid JSON.`,
                     baseline: scope.baseline,
                   }
                 : null,
+              estimates: storedEstimates.map((e) => ({
+                method: e.methodLabel,
+                honestyLabel: e.honestyLabel,
+                seriesId: e.spec.outcomeSeriesId,
+                pointEstimate: e.pointEstimate,
+                standardError: e.standardError,
+                ciLower: e.ciLower,
+                ciUpper: e.ciUpper,
+                pValue: e.pValue,
+                sampleSize: e.sampleSize,
+              })),
               nodes: nodes.map((n) => ({
                 type: NODE_KIND_TAXONOMY[n.kind].label,
                 status: NODE_STATUS_TAXONOMY[n.status].label,
+                honestyLabel: n.honestyLabel,
                 title: n.title,
                 body: n.body,
               })),
@@ -312,7 +427,8 @@ Return ONLY valid JSON.`,
               typeof parsed.methodologyAndTrace === "string" &&
               parsed.methodologyAndTrace.trim()
             ) {
-              baseReport.methodologyAndTrace = parsed.methodologyAndTrace.trim();
+              baseReport.methodologyAndTrace =
+                parsed.methodologyAndTrace.trim();
             }
             if (
               typeof parsed.risksAndCounterfactuals === "string" &&
@@ -329,32 +445,20 @@ Return ONLY valid JSON.`,
       }
     }
 
-    // If compiled for a specific run, also persist the updated brief & appendix
-    if (runId) {
-      const snap = await getRun(userId, runId);
-      if (snap) {
-        await persistTurn(userId, runId, {
-          title: snap.run.title,
-          status: snap.run.status,
-          items: snap.items,
-          nodes: snap.nodes,
-          edges: snap.edges,
-          scope: snap.scope,
-          analyses: Object.values(snap.analyses),
-          draft: {
-            brief: `## Executive Summary\n\n${baseReport.executiveSummary}\n\n${baseReport.spineNarrative}`,
-            appendix: `${baseReport.methodologyAndTrace}\n\n## Counterfactuals & Key Risks\n\n${baseReport.risksAndCounterfactuals}`,
-            updatedAt: baseReport.preparedAt,
-          },
-          events: snap.events,
-        });
-      }
-    }
+    // Run deterministic Data Auditor on the compiled report before returning.
+    // Never overwrite snap.draft (the crew's audited brief).
+    const auditedReport = auditCompiledPolicyReport(baseReport, {
+      fredSeries,
+      estimates: storedEstimates,
+      robustness: storedRobustness,
+    });
 
-    return NextResponse.json({ report: baseReport });
+    return NextResponse.json({ report: auditedReport });
   } catch (error) {
-    const raw =
-      error instanceof Error ? error.message : "Could not compile report.";
-    return NextResponse.json({ error: redactSecrets(raw) }, { status: 500 });
+    const typed = toTypedApiError(error, "compile");
+    return NextResponse.json(
+      { error: typed.message, errorDetail: typed },
+      { status: typed.status },
+    );
   }
 }

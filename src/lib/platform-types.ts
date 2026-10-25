@@ -1,3 +1,8 @@
+import type {
+  EconometricEstimate,
+  PreRegistrationLock,
+  RobustnessBundle,
+} from "@/lib/economics/schemas";
 import type { NodeAnalysis } from "@/schemas/analysis";
 import type { DigressionEdge, DigressionNode } from "@/schemas/digression";
 import type { RunEvent } from "@/schemas/run-event";
@@ -37,6 +42,9 @@ export type RunSnapshot = {
   analyses: Record<string, NodeAnalysis>;
   events: RunEvent[];
   draft: RunDraft | null;
+  estimates?: EconometricEstimate[];
+  robustness?: RobustnessBundle[];
+  preRegistrationLock?: PreRegistrationLock | null;
   invalidatedNodeIds?: string[];
   invalidatedFields?: string[];
 };
