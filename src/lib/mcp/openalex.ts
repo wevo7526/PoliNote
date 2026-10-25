@@ -127,6 +127,54 @@ export function extractEstimateFromAbstract(
   };
 }
 
+const OPENALEX_STOP_WORDS = new Set([
+  "did",
+  "does",
+  "what",
+  "are",
+  "the",
+  "how",
+  "was",
+  "were",
+  "will",
+  "would",
+  "could",
+  "should",
+  "from",
+  "with",
+  "into",
+  "under",
+  "near",
+  "term",
+  "effects",
+  "effect",
+  "increase",
+  "decrease",
+  "affect",
+  "evaluate",
+  "assess",
+  "empirical",
+  "economics",
+  "identification",
+  "elasticity",
+  "statute",
+  "regulation",
+]);
+
+function cleanOpenAlexQuery(raw: string): string[] {
+  const words = raw
+    .replace(/[^a-zA-Z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 3 && !OPENALEX_STOP_WORDS.has(w.toLowerCase()));
+  const unique = words.filter(
+    (w, i) => words.findIndex((x) => x.toLowerCase() === w.toLowerCase()) === i,
+  );
+  const primary = unique.slice(0, 5).join(" ") || raw.trim().slice(0, 48);
+  const fallback = unique.slice(0, 3).join(" ");
+  return fallback && fallback !== primary ? [primary, fallback] : [primary];
+}
+
 export async function searchLiterature(
   args: Record<string, unknown>,
 ): Promise<
@@ -138,26 +186,38 @@ export async function searchLiterature(
   const query = typeof args.query === "string" ? args.query.trim() : "";
   if (!query) return { ok: false, error: "query required" };
 
-  const url = new URL("https://api.openalex.org/works");
-  url.searchParams.set("search", query);
-  url.searchParams.set("per_page", "6");
-  url.searchParams.set("filter", "type:article,language:en");
+  const candidateQueries = cleanOpenAlexQuery(query);
 
   try {
-    const { data, snapshot } = await fetchLiveJsonWithSnapshot<{
-      results?: OpenAlexWork[];
-    }>({
-      provider: "worldbank", // public academic endpoint
-      seriesId: `openalex_${query.slice(0, 20)}`,
-      url: url.toString(),
-      init: {
-        headers: {
-          "User-Agent": "PoliNote/2.0 (mailto:research@polinote.org)",
-        },
-      },
-    });
+    let results: OpenAlexWork[] = [];
+    let lastSnapshotSha = "";
 
-    const works: ExtractedLiteratureEstimate[] = (data.results ?? [])
+    for (const q of candidateQueries) {
+      const url = new URL("https://api.openalex.org/works");
+      url.searchParams.set("search", q);
+      url.searchParams.set("per_page", "6");
+      url.searchParams.set("filter", "type:article,language:en");
+
+      const { data, snapshot } = await fetchLiveJsonWithSnapshot<{
+        results?: OpenAlexWork[];
+      }>({
+        provider: "worldbank",
+        seriesId: `openalex_${q.slice(0, 20)}`,
+        url: url.toString(),
+        init: {
+          headers: {
+            "User-Agent": "PoliNote/2.0 (mailto:research@polinote.org)",
+          },
+        },
+      });
+      lastSnapshotSha = snapshot.sha256;
+      if (data.results && data.results.length > 0) {
+        results = data.results;
+        break;
+      }
+    }
+
+    const works: ExtractedLiteratureEstimate[] = results
       .slice(0, 6)
       .map((work) => {
         const title = work.display_name?.trim() || "Untitled work";
@@ -184,11 +244,11 @@ export async function searchLiterature(
     if (works.length === 0) {
       return {
         ok: false,
-        error: `Data unavailable: OpenAlex — no peer-reviewed works matched "${query}"`,
+        error: `Data unavailable: OpenAlex — no peer-reviewed works matched "${candidateQueries[0]}"`,
       };
     }
 
-    const hash = snapshot.sha256.slice(0, 16) || resultHash(works.map((w) => w.title));
+    const hash = lastSnapshotSha.slice(0, 16) || resultHash(works.map((w) => w.title));
     const first = works[0]!;
     const span: EvidenceSpan = {
       id: spanId("literature", "search", hash),
@@ -196,7 +256,7 @@ export async function searchLiterature(
       tool: "lit.search",
       citation: `OpenAlex: ${first.title}${first.year ? ` (${first.year})` : ""}${first.doi ? ` [${first.doi}]` : ""}`,
       url: first.url,
-      resultHash: snapshot.sha256,
+      resultHash: lastSnapshotSha || hash,
     };
     return { ok: true, data: { works, span }, spanId: span.id };
   } catch (error) {

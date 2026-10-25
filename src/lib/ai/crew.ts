@@ -15,6 +15,7 @@ import {
   streamMcpSpecialists,
   streamTraceNarrator,
 } from "@/lib/ai/crew-specialists";
+import { deriveObservationWindow } from "@/lib/data/selector";
 import {
   auditGeneratedProseNumbers,
   buildAllowedNumericRegistry,
@@ -60,6 +61,7 @@ type ScopeStep = {
   runTitle: string;
   hypothesizedDirection: "positive" | "negative" | "ambiguous";
   preferredMethod: EconometricMethodId;
+  candidateSeriesIds: string[];
   scope: ScopeFields;
 };
 
@@ -335,6 +337,23 @@ function wait(ms: number): Promise<void> {
   });
 }
 
+function extractValidPolicyDate(
+  rawDate: unknown,
+  horizon: string,
+  question: string,
+): string | null {
+  if (typeof rawDate === "string" && rawDate.trim()) {
+    const isoMatch = rawDate.trim().match(/\b(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/);
+    if (isoMatch?.[0]) return isoMatch[0];
+    const ymMatch = rawDate.trim().match(/\b(19\d{2}|20\d{2})-(0[1-9]|1[0-2])\b/);
+    if (ymMatch?.[0]) return `${ymMatch[0]}-01`;
+    const yrMatch = rawDate.trim().match(/\b(19[7-9]\d|20[0-2]\d)\b/);
+    if (yrMatch?.[1]) return `${yrMatch[1]}-01-01`;
+  }
+  const derived = deriveObservationWindow({ question, horizon });
+  return derived.policyDate;
+}
+
 function validateAndParseScope(raw: unknown, question: string): ScopeStep {
   const root = asRecord(raw);
   const scope = asRecord(root.scope ?? raw);
@@ -359,20 +378,20 @@ function validateAndParseScope(raw: unknown, question: string): ScopeStep {
     );
   }
 
-  const rawPolicyDate =
-    typeof scope.policyDate === "string"
-      ? scope.policyDate.trim()
-      : typeof root.policyDate === "string"
-        ? root.policyDate.trim()
-        : null;
-  const policyDate =
-    rawPolicyDate && /^\d{4}-\d{2}-\d{2}$/.test(rawPolicyDate)
-      ? rawPolicyDate
-      : null;
+  const horizonStr = asString(scope.horizon, "");
+  const policyDate = extractValidPolicyDate(
+    scope.policyDate ?? root.policyDate,
+    horizonStr,
+    question,
+  );
   const policyDateSource = asString(
     scope.policyDateSource ?? root.policyDateSource,
     policyDate ? "Statutory / congressional enactment record" : "No single enactment date identified",
   );
+
+  const rawSeriesIds = asArray(root.candidateSeriesIds ?? scope.candidateSeriesIds)
+    .map((item) => (typeof item === "string" ? item.trim().toUpperCase() : ""))
+    .filter((id) => /^[A-Z0-9_]{2,24}$/.test(id));
 
   const methods = asArray(scope.allowedMethods)
     .map((item) => pick(item, METHODS, "literature"))
@@ -393,9 +412,10 @@ function validateAndParseScope(raw: unknown, question: string): ScopeStep {
     runTitle: asString(root.runTitle, question).slice(0, 80),
     hypothesizedDirection,
     preferredMethod,
+    candidateSeriesIds: rawSeriesIds.slice(0, 4),
     scope: {
       jurisdiction: asString(scope.jurisdiction, ""),
-      horizon: asString(scope.horizon, ""),
+      horizon: horizonStr,
       policyDate,
       policyDateSource,
       objective: asString(scope.objective, ""),
@@ -746,11 +766,12 @@ export async function* streamCrewTurn(input: {
   try {
     scopeOut = await askJsonWithSchemaRepair(
       model,
-      `You are PoliNote's Scoper & Identification Strategist. Return JSON with:
+      `You are PoliNote's Scoper, Data Scout & Identification Strategist. Return JSON with:
 - runTitle (max 80 chars)
 - hypothesizedDirection ("positive" | "negative" | "ambiguous")
 - preferredMethod ("event_study" | "local_projections_jorda" | "arima_forecast_counterfactual" | "descriptive_newey_west" | "did_twfe" | "synthetic_control")
-- policyDate ("YYYY-MM-DD" enactment/effective date if the policy has a known historical date, or null if none exists)
+- candidateSeriesIds: array of 2 to 3 official FRED series IDs (e.g. ["PNFI", "GPDIC1"] for nonresidential investment, ["IMPGS", "CPIAUCSL"] for tariffs/trade, ["HOUST", "CUSR0000SEHA"] for housing/zoning, ["PAYEMS", "UNRATE"] for labor/wages, ["FEDFUNDS", "CPIAUCSL"] for monetary policy, ["INDPRO", "MANEMP"] for industrial policy). First ID is the primary outcome series; second ID is the comparison/donor series.
+- policyDate ("YYYY-MM-DD" enactment/effective date of the policy instrument, or a reference reform date in YYYY-MM-DD format)
 - policyDateSource (statutory citation, Public Law number, Federal Register notice, or Congress record for policyDate)
 - scope: { jurisdiction, horizon, policyDate, policyDateSource, objective, instrument, target, identificationStrategy, distributionalCut, baseline, allowedMethods, forbiddenMoves }
 ${SCOPE_STYLE}
@@ -904,6 +925,7 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
     nodes: [...liveNodes.values()],
     preferredMethod: scopeOut.preferredMethod,
     hypothesizedDirection: scopeOut.hypothesizedDirection,
+    candidateSeriesIds: scopeOut.candidateSeriesIds,
   });
   for (const node of mcpResult.nodes) {
     liveNodes.set(node.id, node);
@@ -959,17 +981,15 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
     specs: r.specs,
   }));
 
-  // Step 6: Real Skeptic / Red-Team Model Call (uses SKEPTIC_MODEL when configured)
+  // Step 6 & Step 7: Run Skeptic Red-Team model call, Node Analyses, and Synthesizer in parallel
   yield workingStatus(
-    "Step 6/7 · Skeptic Red-Team model critique & verification wall…",
+    "Step 6/7 · Skeptic Red-Team critique, Synthesizer & Data Auditor running in parallel…",
   );
   const skepticModel = createModelSlot(process.env.SKEPTIC_MODEL?.trim());
-  let skepticOutput: SkepticOutput | null = null;
 
-  try {
-    skepticOutput = await askJsonWithSchemaRepair(
-      skepticModel,
-      `You are PoliNote's Skeptic / Red Team. Return JSON matching SkepticOutputSchema:
+  const skepticTask = askJsonWithSchemaRepair(
+    skepticModel,
+    `You are PoliNote's Skeptic / Red Team. Return JSON matching SkepticOutputSchema:
 {
   "namedConfounders": ["specific historical events or macro shocks in the observation window"],
   "reverseCausalityRisk": "1-2 sentences on endogeneity or anticipation",
@@ -987,21 +1007,97 @@ Keys like con_legal, mech_channel, claim_core, inc_region, unc_id, cf_baseline.`
   ]
 }
 Do not invent any numbers not present in the prompt.`,
-      JSON.stringify({
-        question: input.question,
-        scope: scopeOut.scope,
-        estimates: estimateDigest,
-        robustness: robustnessDigest,
-        dataErrors: mcpResult.dataErrors,
-      }),
-      (parsed) => SkepticOutputSchema.parse(parsed),
-    );
-  } catch (error) {
+    JSON.stringify({
+      question: input.question,
+      scope: scopeOut.scope,
+      estimates: estimateDigest,
+      robustness: robustnessDigest,
+      dataErrors: mcpResult.dataErrors,
+    }),
+    (parsed) => SkepticOutputSchema.parse(parsed),
+  ).catch((error) => {
     console.warn(
       "[polinote/skeptic] model call failed:",
       error instanceof Error ? redactSecrets(error.message) : "error",
     );
-  }
+    return null;
+  });
+
+  const nodeSnapshotBeforeSkeptic = [...liveNodes.values()];
+
+  const analysesTask =
+    graphOut.nodes.length > 0
+      ? askAnalyses(
+          model,
+          JSON.stringify({
+            question: input.question,
+            scope: scopeOut.scope,
+            mcpSpans: mcpSpanDigest,
+            estimates: estimateDigest,
+            robustness: robustnessDigest,
+            literatureEstimates: mcpResult.literatureEstimates,
+            dataErrors: mcpResult.dataErrors,
+            nodes: graphOut.nodes.map((node) => ({
+              key: node.key,
+              kind: node.kind,
+              title: node.title,
+              body: node.body,
+            })),
+            webLeads: web,
+          }),
+        )
+      : Promise.resolve(new Map<string, { title: string; body: string }>());
+
+  const synthTask = allowRoleAction("synthesizer", { type: "write_draft" })
+    ? askJsonWithSchemaRepair(
+        model,
+        `You are PoliNote's Synthesizer. Return JSON { "brief", "appendix" }.
+Every factual sentence MUST cite an existing node short key in square brackets, like [claim_core] or [ev_fred].
+CRITICAL NUMERIC RULE: Every single number you write MUST come verbatim from the provided "estimates", "robustness", "mcpSpans", or "literatureEstimates" objects, and you must name the series ID or date when citing an observation. If "estimates" is empty, DO NOT write any numbers—state clearly that live data was unavailable.
+State the exact honesty label (e.g. Descriptive, Associational, Quasi-experimental (Difference-in-Differences)) and confidence band explicitly.
+Format brief with (## Executive Summary, ## Econometric Findings & Honesty Labels, ## Distributional Incidence) and appendix with (## Identification & Pre-Registration, ## Robustness Curve & What Would Change My Mind).`,
+        JSON.stringify({
+          title: scopeOut.runTitle,
+          question: input.question,
+          mcpSpans: mcpSpanDigest,
+          estimates: estimateDigest,
+          robustness: robustnessDigest,
+          literatureEstimates: mcpResult.literatureEstimates,
+          dataErrors: mcpResult.dataErrors,
+          nodes: nodeSnapshotBeforeSkeptic.map((node) => ({
+            key: shortNodeKey(node.id),
+            id: node.id,
+            kind: node.kind,
+            title: node.title,
+            body: node.body,
+            status: node.status,
+            confidence: node.confidence,
+            honestyLabel: node.honestyLabel,
+          })),
+        }),
+        (parsed) => {
+          const rec = asRecord(parsed);
+          if (typeof rec.brief !== "string" || !rec.brief.trim()) {
+            throw new Error("Synthesizer JSON missing brief string");
+          }
+          return rec;
+        },
+      ).catch((error) => {
+        console.error(
+          "[polinote/crew] synthesizer json failed, using deterministic draft",
+          error instanceof Error
+            ? redactSecrets(error.message)
+            : "synthesizer error",
+        );
+        return null;
+      })
+    : Promise.resolve(null);
+
+  const [skepticOutput, written, rawSynth] = await Promise.all([
+    skepticTask,
+    analysesTask,
+    synthTask,
+  ]);
 
   // Apply Skeptic's unresolvedObjectionsCount to Claim confidence score and update unc_id node
   if (skepticOutput && mcpResult.estimates[0]) {
@@ -1075,7 +1171,7 @@ Do not invent any numbers not present in the prompt.`,
   }
 
   yield workingStatus(
-    "Step 7/7 · Synthesizer writing brief & Data Auditor verifying every number…",
+    "Step 7/7 · Data Auditor verifying every number in synthesis…",
   );
 
   let draft = fallbackDraft(
@@ -1085,78 +1181,6 @@ Do not invent any numbers not present in the prompt.`,
     mcpResult.estimates,
     mcpResult.dataErrors,
   );
-
-  const analysesTask =
-    graphOut.nodes.length > 0
-      ? askAnalyses(
-          model,
-          JSON.stringify({
-            question: input.question,
-            scope: scopeOut.scope,
-            mcpSpans: mcpSpanDigest,
-            estimates: estimateDigest,
-            robustness: robustnessDigest,
-            skeptic: skepticOutput,
-            literatureEstimates: mcpResult.literatureEstimates,
-            dataErrors: mcpResult.dataErrors,
-            nodes: graphOut.nodes.map((node) => ({
-              key: node.key,
-              kind: node.kind,
-              title: node.title,
-              body: node.body,
-            })),
-            webLeads: web,
-          }),
-        )
-      : Promise.resolve(new Map<string, { title: string; body: string }>());
-
-  const synthTask = allowRoleAction("synthesizer", { type: "write_draft" })
-    ? askJsonWithSchemaRepair(
-        model,
-        `You are PoliNote's Synthesizer. Return JSON { "brief", "appendix" }.
-Every factual sentence MUST cite an existing node short key in square brackets, like [claim_core] or [ev_fred].
-CRITICAL NUMERIC RULE: Every single number you write MUST come verbatim from the provided "estimates", "robustness", "mcpSpans", or "literatureEstimates" objects, and you must name the series ID or date when citing an observation. If "estimates" is empty, DO NOT write any numbers—state clearly that live data was unavailable.
-State the exact honesty label (e.g. Descriptive, Associational, Quasi-experimental (Difference-in-Differences)) and confidence band explicitly.
-Format brief with (## Executive Summary, ## Econometric Findings & Honesty Labels, ## Distributional Incidence) and appendix with (## Identification & Pre-Registration, ## Robustness Curve & What Would Change My Mind).`,
-        JSON.stringify({
-          title: scopeOut.runTitle,
-          question: input.question,
-          mcpSpans: mcpSpanDigest,
-          estimates: estimateDigest,
-          robustness: robustnessDigest,
-          skeptic: skepticOutput,
-          literatureEstimates: mcpResult.literatureEstimates,
-          dataErrors: mcpResult.dataErrors,
-          nodes: nodeList.map((node) => ({
-            key: shortNodeKey(node.id),
-            id: node.id,
-            kind: node.kind,
-            title: node.title,
-            body: node.body,
-            status: node.status,
-            confidence: node.confidence,
-            honestyLabel: node.honestyLabel,
-          })),
-        }),
-        (parsed) => {
-          const rec = asRecord(parsed);
-          if (typeof rec.brief !== "string" || !rec.brief.trim()) {
-            throw new Error("Synthesizer JSON missing brief string");
-          }
-          return rec;
-        },
-      ).catch((error) => {
-        console.error(
-          "[polinote/crew] synthesizer json failed, using deterministic draft",
-          error instanceof Error
-            ? redactSecrets(error.message)
-            : "synthesizer error",
-        );
-        return null;
-      })
-    : Promise.resolve(null);
-
-  const [written, rawSynth] = await Promise.all([analysesTask, synthTask]);
 
   for (const raw of graphOut.nodes) {
     const hit = written.get(raw.key) ?? written.get(slugKey(raw.key));

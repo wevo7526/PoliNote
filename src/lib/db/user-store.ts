@@ -813,6 +813,13 @@ async function withEphemeralUserDb<T>(
       await hydrateUserDbFile(userId, filePath);
       cache.hydrated.add(userId);
     }
+
+    // When Blob persistence is not active, keep the DuckDB connection open in cache.dbs
+    // across calls in the warm serverless container instead of reopening 12x per turn.
+    if (!blobPersistenceEnabled()) {
+      return await withLocalUserDb(userId, fn, persist);
+    }
+
     const { DuckDBInstance } = await loadDuckdb();
     const instance = await DuckDBInstance.create(filePath);
     const connection = await instance.connect();

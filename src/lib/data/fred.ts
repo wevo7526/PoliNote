@@ -1,4 +1,4 @@
-import { fetchLiveJsonWithSnapshot } from "./cache";
+import { createSnapshotRecord, fetchLiveJsonWithSnapshot } from "./cache";
 import {
   DataUnavailableError,
   type DataFrequency,
@@ -99,7 +99,8 @@ function mapFredMetadata(
   const id = (raw.id ?? "").trim().toUpperCase();
   const title = (raw.title ?? id).trim();
   const notes = raw.notes?.trim();
-  const discontinued = /discontinued/i.test(title) || /discontinued/i.test(notes ?? "");
+  const discontinued =
+    /discontinued/i.test(title) || /discontinued/i.test(notes ?? "");
   const copyrightedThirdParty = isCopyrightedNotes(notes);
   return {
     provider,
@@ -149,12 +150,190 @@ function buildFredEndpointUrl(
   return url.toString();
 }
 
+function inferFrequencyFromDates(pts: ObservationPoint[]): {
+  frequency: string;
+  frequencyShort: DataFrequency;
+} {
+  if (pts.length < 3) {
+    return { frequency: "Reported", frequencyShort: "unknown" };
+  }
+  const d0 = new Date(pts[pts.length - 2]!.date).getTime();
+  const d1 = new Date(pts[pts.length - 1]!.date).getTime();
+  const diffDays = Math.abs(d1 - d0) / (1000 * 60 * 60 * 24);
+  if (diffDays <= 3) return { frequency: "Daily", frequencyShort: "d" };
+  if (diffDays <= 10) return { frequency: "Weekly", frequencyShort: "w" };
+  if (diffDays <= 40) return { frequency: "Monthly", frequencyShort: "m" };
+  if (diffDays <= 110) return { frequency: "Quarterly", frequencyShort: "q" };
+  return { frequency: "Annual", frequencyShort: "a" };
+}
+
+function applyUnitsTransformToPoints(
+  pts: ObservationPoint[],
+  transform: FredUnitsTransform,
+): ObservationPoint[] {
+  if (transform === "lin") return pts;
+  if (transform === "log") {
+    return pts
+      .filter((p) => p.value > 0)
+      .map((p) => ({ ...p, value: +Math.log(p.value).toFixed(6) }));
+  }
+  if (transform === "chg") {
+    return pts.slice(1).map((p, i) => ({
+      ...p,
+      value: +(p.value - pts[i]!.value).toFixed(6),
+    }));
+  }
+  if (transform === "pch" || transform === "pc1" || transform === "pca") {
+    return pts.slice(1).map((p, i) => {
+      const prev = pts[i]!.value;
+      const pct = prev !== 0 ? ((p.value - prev) / Math.abs(prev)) * 100 : 0;
+      return { ...p, value: +pct.toFixed(6) };
+    });
+  }
+  return pts;
+}
+
+/**
+ * Fetches live observations directly from St. Louis Fed's official public CSV endpoint
+ * (`https://fred.stlouisfed.org/graph/fredgraph.csv?id=<SERIES_ID>`) when `FRED_API_KEY`
+ * is not configured in the environment. Zero hardcoded or cached data; every observation
+ * is pulled live from `fred.stlouisfed.org` at run time and hashed with SHA-256.
+ */
+async function fetchFredPublicCsvBundle(
+  seriesId: string,
+  options: ObservationsQuery = {},
+): Promise<FetchedSeriesBundle> {
+  const cleanId = seriesId.trim().toUpperCase();
+  const csvUrl = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(cleanId)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+
+  try {
+    const response = await fetch(csvUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "PoliNote/2.0 (https://polinote.vercel.app)",
+      },
+    });
+    if (!response.ok) {
+      throw new DataUnavailableError(
+        "fred",
+        `FRED series ${cleanId} returned HTTP ${response.status}`,
+      );
+    }
+
+    const rawCsv = await response.text();
+    const lines = rawCsv
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    if (lines.length < 2 || !/^observation_date|^DATE/i.test(lines[0]!)) {
+      throw new DataUnavailableError(
+        "fred",
+        `FRED series ${cleanId} returned an invalid CSV payload`,
+      );
+    }
+
+    let pts: ObservationPoint[] = [];
+    for (let i = 1; i < lines.length; i += 1) {
+      const [dateStr, valStr] = lines[i]!.split(",");
+      if (!dateStr || !valStr || valStr === ".") continue;
+      const val = Number.parseFloat(valStr);
+      if (!Number.isFinite(val)) continue;
+      if (options.start && dateStr < options.start) continue;
+      if (options.end && dateStr > options.end) continue;
+      pts.push({ date: dateStr, value: val });
+    }
+
+    const transform: FredUnitsTransform = options.units ?? "lin";
+    pts = applyUnitsTransformToPoints(pts, transform);
+
+    if (pts.length === 0) {
+      throw new DataUnavailableError(
+        "fred",
+        `Series ${cleanId} returned 0 valid observations for window ${options.start ?? "start"} to ${options.end ?? "latest"}`,
+      );
+    }
+
+    const freqInfo = inferFrequencyFromDates(pts);
+    const firstDate = pts[0]!.date;
+    const lastDate = pts[pts.length - 1]!.date;
+    const snapshot = createSnapshotRecord({
+      provider: "fred",
+      seriesId: cleanId,
+      requestUrl: csvUrl,
+      rawJson: rawCsv,
+    });
+
+    const sourceUrl = `https://fred.stlouisfed.org/series/${encodeURIComponent(cleanId)}`;
+    const metadata: SeriesMetadata = {
+      provider: "fred",
+      id: cleanId,
+      title: `FRED Series ${cleanId}`,
+      units:
+        transform === "lin"
+          ? "Official FRED Units"
+          : `Official FRED Units (${TRANSFORM_LABELS[transform]})`,
+      frequency: freqInfo.frequency,
+      frequencyShort: freqInfo.frequencyShort,
+      seasonalAdjustment: "Reported by St. Louis Fed (FRED)",
+      observationStart: firstDate,
+      observationEnd: lastDate,
+      lastUpdated: lastDate,
+      discontinued: false,
+      copyrightedThirdParty: false,
+      licenseAttribution:
+        "Source: Federal Reserve Economic Data (FRED), Federal Reserve Bank of St. Louis.",
+      sourceUrl,
+    };
+
+    const provenance: DataProvenance = {
+      source: "fred",
+      seriesId: cleanId,
+      title: metadata.title,
+      units: metadata.units,
+      transform: `${transform} — ${TRANSFORM_LABELS[transform]}`,
+      seasonalAdjustment: metadata.seasonalAdjustment,
+      frequency: metadata.frequency,
+      observationWindow: { start: firstDate, end: lastDate },
+      vintageDate: lastDate,
+      lastUpdated: lastDate,
+      retrievedAt: snapshot.retrievedAt,
+      url: sourceUrl,
+      licenseAttribution: metadata.licenseAttribution,
+      copyrightedThirdParty: false,
+      payloadSha256: snapshot.sha256,
+    };
+
+    return {
+      metadata,
+      observations: pts,
+      provenance,
+      snapshot,
+      vintages: [lastDate],
+    };
+  } catch (error) {
+    if (error instanceof DataUnavailableError) throw error;
+    throw new DataUnavailableError(
+      "fred",
+      error instanceof Error ? error.message : "FRED live pull failed",
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchFredVintageDates(
   seriesId: string,
   limit = 20,
   asOfDate?: string,
 ): Promise<string[]> {
   const cleanId = seriesId.trim().toUpperCase();
+  if (!resolveFredKey()) {
+    const bundle = await fetchFredPublicCsvBundle(cleanId);
+    return bundle.vintages ?? [];
+  }
   const url = buildFredEndpointUrl(
     "series/vintagedates",
     {
@@ -165,7 +344,9 @@ export async function fetchFredVintageDates(
     },
     asOfDate ? "alfred" : "fred",
   );
-  const { data } = await fetchLiveJsonWithSnapshot<{ vintage_dates?: string[] }>({
+  const { data } = await fetchLiveJsonWithSnapshot<{
+    vintage_dates?: string[];
+  }>({
     provider: asOfDate ? "alfred" : "fred",
     seriesId: cleanId,
     url,
@@ -194,6 +375,12 @@ export class FredDataProvider implements LiveDataProvider {
     if (!cleaned) {
       throw new DataUnavailableError(this.id, "Search query is required");
     }
+    if (!resolveFredKey()) {
+      throw new DataUnavailableError(
+        this.id,
+        "FRED_API_KEY is not configured for free-text catalog search; direct FRED series IDs are fetched live via fredgraph.csv",
+      );
+    }
     const url = buildFredEndpointUrl(
       "series/search",
       {
@@ -204,7 +391,9 @@ export class FredDataProvider implements LiveDataProvider {
       },
       this.id,
     );
-    const { data } = await fetchLiveJsonWithSnapshot<{ seriess?: FredSeriesRaw[] }>({
+    const { data } = await fetchLiveJsonWithSnapshot<{
+      seriess?: FredSeriesRaw[];
+    }>({
       provider: this.id,
       seriesId: `search_${cleaned.slice(0, 24)}`,
       url,
@@ -219,12 +408,18 @@ export class FredDataProvider implements LiveDataProvider {
     if (!cleanId) {
       throw new DataUnavailableError(this.id, "Series ID is required");
     }
+    if (!resolveFredKey()) {
+      const bundle = await fetchFredPublicCsvBundle(cleanId);
+      return bundle.metadata;
+    }
     const url = buildFredEndpointUrl(
       "series",
       { series_id: cleanId },
       this.id,
     );
-    const { data } = await fetchLiveJsonWithSnapshot<{ seriess?: FredSeriesRaw[] }>({
+    const { data } = await fetchLiveJsonWithSnapshot<{
+      seriess?: FredSeriesRaw[];
+    }>({
       provider: this.id,
       seriesId: cleanId,
       url,
@@ -246,6 +441,10 @@ export class FredDataProvider implements LiveDataProvider {
     const cleanId = id.trim().toUpperCase();
     if (!cleanId) {
       throw new DataUnavailableError(this.id, "Series ID is required");
+    }
+
+    if (!resolveFredKey()) {
+      return fetchFredPublicCsvBundle(cleanId, options);
     }
 
     const transform: FredUnitsTransform = options.units ?? "lin";
@@ -351,9 +550,7 @@ export class FredDataProvider implements LiveDataProvider {
         vintageMode,
       },
       vintageDate:
-        vintages[0] ??
-        data.realtime_end ??
-        meta.lastUpdated.slice(0, 10),
+        vintages[0] ?? data.realtime_end ?? meta.lastUpdated.slice(0, 10),
       lastUpdated: meta.lastUpdated,
       retrievedAt: snapshot.retrievedAt,
       url: meta.sourceUrl,

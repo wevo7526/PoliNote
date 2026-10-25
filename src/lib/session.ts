@@ -125,6 +125,7 @@ export async function evaluateWorkspaceSession(input: {
   clientSuppliedId?: string | null;
   nodeEnv?: string;
   configuredSecret?: string;
+  rotateStaleCookie?: boolean;
 }): Promise<VerifiedSessionDecision> {
   const nodeEnv = input.nodeEnv ?? process.env.NODE_ENV ?? "development";
   const secret = await resolveSessionSecret({
@@ -139,14 +140,34 @@ export async function evaluateWorkspaceSession(input: {
     const parts = rawCookie.split(".");
     const cookieUid = parts[0] ?? "";
     const mac = parts[1] ?? "";
-    if (
-      parts.length !== 2 ||
-      !isUserId(cookieUid) ||
-      !verifySessionMac(cookieUid, mac, secret)
-    ) {
-      throw new SessionForbiddenError(
-        "Forbidden: invalid or forged session cookie signature.",
-      );
+    const validSig =
+      parts.length === 2 &&
+      isUserId(cookieUid) &&
+      verifySessionMac(cookieUid, mac, secret);
+
+    if (!validSig) {
+      if (!input.rotateStaleCookie || clientId) {
+        throw new SessionForbiddenError(
+          "Forbidden: invalid or forged session cookie signature.",
+        );
+      }
+      // Browser has a stale HttpOnly cookie from before a SESSION_SECRET rotation:
+      // discard the unverified cookieUid and issue a fresh signed session cookie.
+      const freshId = crypto.randomUUID();
+      const signedValue = `${freshId}.${signSessionUserId(freshId, secret)}`;
+      return {
+        userId: freshId,
+        isNewSession: true,
+        cookieName: SESSION_COOKIE_NAME,
+        cookieValue: signedValue,
+        cookieOptions: {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: nodeEnv === "production",
+          path: "/",
+          maxAge: 60 * 60 * 24 * 365,
+        },
+      };
     }
 
     if (clientId && clientId !== cookieUid) {
@@ -202,6 +223,7 @@ export async function getSessionUserId(): Promise<string> {
   const decision = await evaluateWorkspaceSession({
     rawCookie,
     clientSuppliedId: headerUid,
+    rotateStaleCookie: !headerUid,
   });
 
   if (decision.isNewSession) {

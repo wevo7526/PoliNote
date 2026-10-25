@@ -268,6 +268,18 @@ test("2. Cookie-Bound Workspace Security: 403 on forged cookie or mismatched cli
   assert.equal(verified.cookieOptions.httpOnly, true);
   assert.equal(verified.cookieOptions.secure, true);
   assert.equal(verified.cookieOptions.sameSite, "lax");
+
+  // 6) Stale browser cookie after SESSION_SECRET rotation (with rotateStaleCookie: true and no clientSuppliedId)
+  // discards the unverified UID and issues a brand-new signed cookie so browsers never get stuck on 403
+  const rotated = await evaluateWorkspaceSession({
+    rawCookie: `${validUid}.${"0".repeat(64)}`,
+    nodeEnv: "production",
+    configuredSecret: testSecret,
+    rotateStaleCookie: true,
+  });
+  assert.notEqual(rotated.userId, validUid);
+  assert.equal(rotated.isNewSession, true);
+  assert.ok(rotated.cookieValue.startsWith(`${rotated.userId}.`));
 });
 
 test("3. Method Honesty: DiD, Synthetic Control & Event Study relabel to Descriptive without comparison/donor data, and retain Quasi-experimental with donors", () => {

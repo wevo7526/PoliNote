@@ -145,6 +145,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const snapshotRef = useRef<RunSnapshot | null>(null);
   const snapshotsByIdRef = useRef<Record<string, RunSnapshot>>({});
   const abortRef = useRef<AbortController | null>(null);
+  const busyRef = useRef(false);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   useEffect(() => {
     snapshotRef.current = snapshot;
@@ -308,7 +313,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!runFromUrl) return;
-    if (snapshot?.run.id === runFromUrl) return;
+    if (snapshot?.run.id === runFromUrl || snapshotRef.current?.run.id === runFromUrl) {
+      return;
+    }
     const cached = snapshotsByIdRef.current[runFromUrl];
     if (cached) {
       applySnapshot(cached);
@@ -318,7 +325,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const response = await apiFetch(`/api/runs/${runFromUrl}`);
-        if (!cancelled && response.ok) {
+        if (!cancelled && !busyRef.current && response.ok) {
           const data = await readJson<RunSnapshot>(response);
           applySnapshot(data);
         }
@@ -630,6 +637,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       abortRef.current?.abort();
       const abort = new AbortController();
       abortRef.current = abort;
+      busyRef.current = true;
       setBusy(true);
 
       const optimistic = applyCrewEvent(current, {
@@ -704,6 +712,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         );
       } finally {
         if (abortRef.current === abort) abortRef.current = null;
+        busyRef.current = false;
         setBusy(false);
       }
     },

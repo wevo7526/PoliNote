@@ -226,6 +226,7 @@ export async function selectAndValidateLiveSeries(input: {
   horizon?: string;
   policyDate?: string | null;
   extraQueries?: string[];
+  proposedSeriesIds?: string[];
   maxSelected?: number;
 }): Promise<SeriesSelectionReport> {
   const derivedWindow = deriveObservationWindow({
@@ -243,11 +244,39 @@ export async function selectAndValidateLiveSeries(input: {
   const providerErrors: Array<{ provider: DataProviderId; message: string }> = [];
   const rawCandidates: SeriesMetadata[] = [];
 
+  // 1. Validate any explicit candidate series IDs proposed by Scoper / Data Scout against live provider metadata
+  const proposed = (input.proposedSeriesIds ?? [])
+    .map((s) => s.trim().toUpperCase())
+    .filter((s, i, a) => /^[A-Z0-9_:-]{2,32}$/.test(s) && a.indexOf(s) === i);
+
+  if (proposed.length > 0) {
+    const metaResults = await Promise.all(
+      proposed.slice(0, 5).map(async (id) => {
+        try {
+          return await fredProvider.metadata(id);
+        } catch (error) {
+          providerErrors.push({
+            provider: "fred",
+            message:
+              error instanceof Error
+                ? error.message
+                : `Metadata lookup failed for ${id}`,
+          });
+          return null;
+        }
+      }),
+    );
+    for (const m of metaResults) {
+      if (m) rawCandidates.push(m);
+    }
+  }
+
+  // 2. If FRED_API_KEY is configured, also run catalog search queries
   if (fredProvider.isConfigured()) {
     const searchResults = await Promise.all(
-      queries.slice(0, 3).map(async (q) => {
+      queries.slice(0, 2).map(async (q) => {
         try {
-          return await fredProvider.search(q, 10);
+          return await fredProvider.search(q, 8);
         } catch (error) {
           const msg =
             error instanceof DataUnavailableError
@@ -263,10 +292,10 @@ export async function selectAndValidateLiveSeries(input: {
     for (const batch of searchResults) {
       rawCandidates.push(...batch);
     }
-  } else {
+  } else if (rawCandidates.length === 0) {
     providerErrors.push({
       provider: "fred",
-      message: "Data unavailable: FRED — FRED_API_KEY is not configured in environment",
+      message: "Data unavailable: FRED — FRED_API_KEY is not configured for free-text catalog search",
     });
   }
 

@@ -149,13 +149,6 @@ export async function getObservations(
   const isWb = /^WB:|^[A-Z]{3}:[A-Z0-9._]+$/i.test(rawSeriesId) && !isBea && !isBls;
   const seriesId = rawSeriesId.replace(/^(?:BEA|BLS|WB|FRED):/i, "");
 
-  if (!isBea && !isBls && !isWb && !resolveFredKey()) {
-    return {
-      ok: false,
-      error: `Data unavailable: FRED (${seriesId}) — FRED_API_KEY is not configured`,
-    };
-  }
-
   const defaultWin = deriveObservationWindow({
     question: typeof args.question === "string" ? args.question : seriesId,
     policyDate: typeof args.policyDate === "string" ? args.policyDate : undefined,

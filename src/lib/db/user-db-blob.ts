@@ -4,6 +4,7 @@ import { redactSecrets } from "@/lib/mcp/http";
 import { isUserId } from "@/lib/session";
 
 const ACCESS = "private" as const;
+let blobTokenInvalid = false;
 
 export function userDbBlobKey(userId: string): string {
   if (!isUserId(userId)) {
@@ -20,7 +21,7 @@ export function userJsonBlobKey(userId: string): string {
 }
 
 export function blobPersistenceEnabled(): boolean {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim());
+  return !blobTokenInvalid && Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim());
 }
 
 export async function hydrateUserDbFile(
@@ -41,10 +42,10 @@ export async function hydrateUserDbFile(
     return true;
   } catch (error) {
     if (error instanceof BlobNotFoundError) return false;
-    console.warn(
-      "[polinote/blob] hydrate duckdb skipped:",
-      error instanceof Error ? redactSecrets(error.message) : "blob error",
-    );
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/access denied|invalid token|forbidden/i.test(msg)) {
+      blobTokenInvalid = true;
+    }
     return false;
   }
 }
@@ -63,9 +64,14 @@ export async function persistUserDbFile(
       contentType: "application/octet-stream",
     });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/access denied|invalid token|forbidden/i.test(msg)) {
+      blobTokenInvalid = true;
+      return;
+    }
     console.warn(
       "[polinote/blob] persist duckdb skipped:",
-      error instanceof Error ? redactSecrets(error.message) : "blob error",
+      redactSecrets(msg),
     );
   }
 }

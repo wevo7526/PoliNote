@@ -404,6 +404,7 @@ export async function* streamMcpSpecialists(input: {
   nodes: DigressionNode[];
   preferredMethod?: EconometricMethodId;
   hypothesizedDirection?: "positive" | "negative" | "ambiguous";
+  candidateSeriesIds?: string[];
 }): AsyncGenerator<CrewStreamEvent, McpSpecialistsResult> {
   const allow = input.contract.mcpAllowlist;
   const methods = new Set(input.scope.allowedMethods);
@@ -428,7 +429,8 @@ export async function* streamMcpSpecialists(input: {
         horizon: input.scope.horizon,
         policyDate: resolvedPolicyDate,
         extraQueries: [input.queries.fred, input.queries.macro],
-        maxSelected: 4,
+        proposedSeriesIds: input.candidateSeriesIds,
+        maxSelected: 3,
       });
       for (const err of selectionReport.providerErrors) {
         dataErrors.push(err.message);
