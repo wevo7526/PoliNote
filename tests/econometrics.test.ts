@@ -138,9 +138,10 @@ test("1. Static Guard: Zero hardcoded economic benchmark arrays or domain templa
   }
 });
 
-test("2. OLS with Newey-West HAC recovers known step shift (+12.0) with p < 0.001", () => {
+test("2. OLS with Newey-West HAC recovers known step shift (+12.0) with p < 0.001 & enforces Method Honesty", () => {
   const fixture = makeKnownStepFixture();
-  const est = executeEconometricEstimate({
+  // Single-series event_study without comparison series is relabeled Descriptive
+  const singleEst = executeEconometricEstimate({
     method: "event_study",
     outcome: fixture,
     policyDate: "2018-01-01",
@@ -148,11 +149,30 @@ test("2. OLS with Newey-West HAC recovers known step shift (+12.0) with p < 0.00
   });
 
   assert.ok(
-    Math.abs(est.pointEstimate - 12.0) < 0.5,
-    `Expected point estimate near +12.0, got ${est.pointEstimate}`,
+    Math.abs(singleEst.pointEstimate - 12.0) < 0.5,
+    `Expected point estimate near +12.0, got ${singleEst.pointEstimate}`,
   );
-  assert.ok(est.ciLower > 10.5 && est.ciUpper < 13.5);
-  assert.ok(est.pValue < 0.001);
+  assert.ok(singleEst.ciLower > 10.5 && singleEst.ciUpper < 13.5);
+  assert.ok(singleEst.pValue < 0.001);
+  assert.equal(singleEst.honestyTier, "Descriptive");
+  assert.ok(singleEst.relabelReason?.includes("Single-series"));
+
+  // With a flat untreated comparison series, event_study retains Quasi-experimental
+  const compFixture: FetchedSeriesBundle = {
+    ...fixture,
+    metadata: { ...fixture.metadata, id: "TEST_COMP" },
+    observations: fixture.observations.map((pt, idx) => ({
+      date: pt.date,
+      value: 100 + 0.5 * idx + (idx % 2 === 0 ? 0.2 : -0.2),
+    })),
+  };
+  const est = executeEconometricEstimate({
+    method: "event_study",
+    outcome: fixture,
+    donors: [compFixture],
+    policyDate: "2018-01-01",
+    scopeId: "scope_tcja_test",
+  });
   assert.equal(est.honestyLabel, "Quasi-experimental (Event Study)");
   assert.ok((est.eventStudyPath?.length ?? 0) >= 6);
   assert.ok((est.localProjectionsPath?.length ?? 0) >= 4);
@@ -194,19 +214,44 @@ test("3. Automatic Robustness Suite & Specification Forks preserve sign on known
 
 test("4. Claim Status Lifecycle Rule: sets supported / contradicted / inconclusive / unverifiable deterministically", () => {
   const fixture = makeKnownStepFixture();
+  const compFixture: FetchedSeriesBundle = {
+    ...fixture,
+    metadata: { ...fixture.metadata, id: "TEST_COMP" },
+    observations: fixture.observations.map((pt, idx) => ({
+      date: pt.date,
+      value: 100 + 0.5 * idx + (idx % 2 === 0 ? 0.2 : -0.2),
+    })),
+  };
+  const singleHeadline = executeEconometricEstimate({
+    method: "event_study",
+    outcome: fixture,
+    policyDate: "2018-01-01",
+    scopeId: "scope_tcja_test",
+  });
   const headline = executeEconometricEstimate({
     method: "event_study",
     outcome: fixture,
+    donors: [compFixture],
     policyDate: "2018-01-01",
     scopeId: "scope_tcja_test",
   });
   const robustness = runAutomaticRobustnessSuite({
     headline,
     outcome: fixture,
+    donors: [compFixture],
     scopeId: "scope_tcja_test",
   });
 
-  // Positive hypothesis matches +12.0 estimate -> supported
+  // Single-series Descriptive estimate is capped at medium confidence
+  const singleSup = evaluateClaimStatusFromEstimate({
+    estimate: singleHeadline,
+    robustness,
+    hypothesizedDirection: "positive",
+  });
+  assert.equal(singleSup.status, "supported");
+  assert.equal(singleSup.confidence, "medium");
+
+  // Comparison-backed Quasi-experimental estimate reaches high confidence, lowered by Skeptic objections
   const sup = evaluateClaimStatusFromEstimate({
     estimate: headline,
     robustness,
@@ -214,6 +259,14 @@ test("4. Claim Status Lifecycle Rule: sets supported / contradicted / inconclusi
   });
   assert.equal(sup.status, "supported");
   assert.equal(sup.confidence, "high");
+
+  const withSkepticObjections = evaluateClaimStatusFromEstimate({
+    estimate: headline,
+    robustness,
+    hypothesizedDirection: "positive",
+    unresolvedSkepticObjections: 2,
+  });
+  assert.equal(withSkepticObjections.confidence, "medium");
 
   // Negative hypothesis against +12.0 estimate -> contradicted
   const contra = evaluateClaimStatusFromEstimate({

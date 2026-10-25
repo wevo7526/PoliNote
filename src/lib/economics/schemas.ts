@@ -29,6 +29,16 @@ export const HonestyTierSchema = z.enum([
 
 export type HonestyTier = z.infer<typeof HonestyTierSchema>;
 
+export const MethodImplementationStatusSchema = z.enum([
+  "Working",
+  "Partial",
+  "Not yet",
+]);
+
+export type MethodImplementationStatus = z.infer<
+  typeof MethodImplementationStatusSchema
+>;
+
 export const DiagnosticCheckItemSchema = z.object({
   name: z.string(),
   status: z.enum(["pass", "warn", "fail"]),
@@ -62,11 +72,14 @@ export const PreRegistrationLockSchema = z.object({
   lockedAt: z.string(),
   scopeId: z.string(),
   outcomeSeriesId: z.string(),
+  comparisonSeriesIds: z.array(z.string()).default([]),
+  selectionRulesSummary: z.string().default("Quality & pre/post window coverage validation"),
   transform: z.string(),
   method: EconometricMethodIdSchema,
   windowStart: z.string(),
   windowEnd: z.string(),
   policyDate: z.string().nullable(),
+  hacLags: z.number().int().default(4),
   forkParentHash: z.string().optional(),
   forkReason: z.string().optional(),
 });
@@ -76,6 +89,7 @@ export type PreRegistrationLock = z.infer<typeof PreRegistrationLockSchema>;
 export const EstimationSpecSchema = z.object({
   specId: z.string().min(1),
   method: EconometricMethodIdSchema,
+  requestedMethod: EconometricMethodIdSchema.optional(),
   formula: z.string().min(1),
   outcomeSeriesId: z.string().min(1),
   outcomeTitle: z.string().min(1),
@@ -85,6 +99,7 @@ export const EstimationSpecSchema = z.object({
   windowEnd: z.string(),
   transform: z.string().default("lin"),
   controls: z.array(z.string()).default([]),
+  donorSeriesIds: z.array(z.string()).default([]),
   fixedEffects: z.array(z.string()).default([]),
   clustering: z.string().default("Newey-West HAC (lags=4)"),
   ciLevel: z.number().default(0.95),
@@ -137,9 +152,13 @@ export type CounterfactualComparisonPoint = z.infer<
 export const EconometricEstimateSchema = z.object({
   id: z.string().min(1),
   method: EconometricMethodIdSchema,
+  requestedMethod: EconometricMethodIdSchema.optional(),
   methodLabel: z.string().min(1),
+  implementationStatus: MethodImplementationStatusSchema.default("Working"),
   honestyTier: HonestyTierSchema,
   honestyLabel: z.string().min(1),
+  relabelReason: z.string().optional(),
+  executionEngine: z.enum(["typescript-hac", "python-statsmodels"]).default("typescript-hac"),
   pointEstimate: z.number(),
   standardError: z.number().nonnegative(),
   ciLower: z.number(),
@@ -231,11 +250,13 @@ export type NumericAuditReport = z.infer<typeof NumericAuditReportSchema>;
 export type MethodCatalogDescriptor = {
   id: EconometricMethodId;
   label: string;
+  implementationStatus: MethodImplementationStatus;
   honestyTier: HonestyTier;
   honestyLabel: string;
   minObservations: number;
   requiresPolicyDate: boolean;
   requiresDonorPool: boolean;
+  minDonors?: number;
   requiresInstrument: boolean;
   requiresCutoff: boolean;
   plainLanguageExplanation: string;
@@ -246,16 +267,17 @@ export type MethodCatalogDescriptor = {
 export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor> = {
   descriptive_newey_west: {
     id: "descriptive_newey_west",
-    label: "Pre/Post Mean & Trend Shift (Newey–West HAC SEs)",
+    label: "Interrupted Time Series / Pre-Post Trend Shift (Newey–West HAC SEs)",
+    implementationStatus: "Working",
     honestyTier: "Descriptive",
     honestyLabel: "Descriptive",
     minObservations: 10,
-    requiresPolicyDate: false,
+    requiresPolicyDate: true,
     requiresDonorPool: false,
     requiresInstrument: false,
     requiresCutoff: false,
     plainLanguageExplanation:
-      "Compares the outcome series before and after the policy date while controlling for a linear time trend, using Newey–West heteroskedasticity and autocorrelation consistent (HAC) standard errors.",
+      "Compares the outcome series before and after the policy date while controlling for a linear time trend, using Newey–West heteroskedasticity and autocorrelation consistent (HAC) standard errors. Never labeled quasi-experimental without an untreated comparison group.",
     assumptions: [
       "Weak stationarity of residual innovations",
       "HAC truncation lag captures serial correlation structure",
@@ -268,6 +290,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   chow_break_test: {
     id: "chow_break_test",
     label: "Chow Structural Break Test at Policy Date",
+    implementationStatus: "Working",
     honestyTier: "Descriptive",
     honestyLabel: "Descriptive",
     minObservations: 12,
@@ -289,6 +312,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   bai_perron_break: {
     id: "bai_perron_break",
     label: "Bai–Perron Unknown Structural Break Detection",
+    implementationStatus: "Working",
     honestyTier: "Descriptive",
     honestyLabel: "Descriptive",
     minObservations: 16,
@@ -309,6 +333,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   stationarity_adf_kpss: {
     id: "stationarity_adf_kpss",
     label: "Stationarity Diagnostics (ADF & KPSS)",
+    implementationStatus: "Working",
     honestyTier: "Descriptive",
     honestyLabel: "Descriptive",
     minObservations: 12,
@@ -329,6 +354,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   arima_forecast_counterfactual: {
     id: "arima_forecast_counterfactual",
     label: "AR/ARIMA Pre-Policy Counterfactual Forecast",
+    implementationStatus: "Working",
     honestyTier: "Associational",
     honestyLabel: "Associational",
     minObservations: 14,
@@ -344,16 +370,17 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
     ],
     threatsToValidity: [
       "Forecast uncertainty widens with horizon length",
-      "Post-policy macro shocks (e.g., pandemic or monetary tightening) enter the gap between actual and forecast",
+      "Post-policy macro shocks enter the gap between actual and forecast",
     ],
   },
   local_projections_jorda: {
     id: "local_projections_jorda",
     label: "Jordà Local Projections Impulse Response (HAC CIs)",
+    implementationStatus: "Working",
     honestyTier: "Associational",
     honestyLabel: "Associational",
     minObservations: 16,
-    requiresPolicyDate: false,
+    requiresPolicyDate: true,
     requiresDonorPool: false,
     requiresInstrument: false,
     requiresCutoff: false,
@@ -371,6 +398,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   var_svar: {
     id: "var_svar",
     label: "Vector Autoregression (VAR / Cholesky SVAR)",
+    implementationStatus: "Partial",
     honestyTier: "Associational",
     honestyLabel: "Associational",
     minObservations: 20,
@@ -379,7 +407,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
     requiresInstrument: false,
     requiresCutoff: false,
     plainLanguageExplanation:
-      "Estimates a multivariate autoregressive system with recursive (Cholesky) Contemporaneous ordering stated explicitly in the specification.",
+      "Estimates a reduced-form multivariate autoregressive system with recursive (Cholesky) contemporaneous ordering stated explicitly in the specification.",
     assumptions: [
       "Recursive timing restriction (slow-moving variables ordered before fast-moving policy/financial variables)",
       "Invertibility and stability of the VAR companion matrix",
@@ -392,15 +420,16 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   granger_predictive: {
     id: "granger_predictive",
     label: "Granger Predictive Causality Test (Non-Causal)",
+    implementationStatus: "Working",
     honestyTier: "Associational",
-    honestyLabel: "Associational",
+    honestyLabel: "Associational (Granger Predictive — Non-Causal)",
     minObservations: 16,
     requiresPolicyDate: false,
     requiresDonorPool: false,
     requiresInstrument: false,
     requiresCutoff: false,
     plainLanguageExplanation:
-      "Tests whether lagged values of the predictor variable improve out-of-sample/in-sample linear prediction of the outcome beyond the outcome's own lags. Strictly predictive, not structural causation.",
+      "Tests whether lagged values of the predictor variable improve linear prediction of the outcome beyond the outcome's own lags. Strictly predictive, not structural causation.",
     assumptions: [
       "Stationarity of both series (or differenced transform)",
       "Linear lag structure",
@@ -413,69 +442,76 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   event_study: {
     id: "event_study",
     label: "Dynamic Event Study (Leads & Lags with Pre-Trend F-Test)",
+    implementationStatus: "Working",
     honestyTier: "Quasi-experimental",
     honestyLabel: "Quasi-experimental (Event Study)",
     minObservations: 14,
     requiresPolicyDate: true,
-    requiresDonorPool: false,
+    requiresDonorPool: true,
+    minDonors: 1,
     requiresInstrument: false,
     requiresCutoff: false,
     plainLanguageExplanation:
-      "Estimates period-relative lead and lag coefficients around the policy enactment date (normalized to t = -1) and conducts a joint F-test that pre-policy lead coefficients equal zero.",
+      "Estimates period-relative lead and lag coefficients around the policy enactment date (normalized to t = -1) relative to a comparison series and conducts a joint F-test that pre-policy lead coefficients equal zero. When run on a single series without a comparison group, it is automatically relabeled Descriptive.",
     assumptions: [
       "No anticipation prior to the reference period t = -1",
-      "Parallel secular trend absent treatment (tested via pre-trend leads)",
+      "Parallel trends between treated and comparison series absent treatment (tested via pre-trend leads)",
     ],
     threatsToValidity: [
       "Significant pre-trends (pre-trend p < 0.05) indicate violation of the counterfactual trend assumption",
-      "Single-series event studies without an untreated control group remain vulnerable to coincident macro events",
+      "Single-series event studies without an untreated comparison group are relabeled Descriptive",
     ],
   },
   did_twfe: {
     id: "did_twfe",
-    label: "Difference-in-Differences (Two-Way FE / Control-Group Differenced)",
+    label: "Difference-in-Differences (Comparison-Series Differenced)",
+    implementationStatus: "Working",
     honestyTier: "Quasi-experimental",
     honestyLabel: "Quasi-experimental (Difference-in-Differences)",
     minObservations: 12,
     requiresPolicyDate: true,
     requiresDonorPool: true,
+    minDonors: 1,
     requiresInstrument: false,
     requiresCutoff: false,
     plainLanguageExplanation:
-      "Compares pre-to-post outcome changes in the treated unit/series against untreated comparison units/series using two-way fixed effects and cluster-robust / HAC standard errors.",
+      "Compares pre-to-post outcome changes in the treated series against an untreated comparison series (Y_treated - Y_comparison) with a pre-trend parallelism test and Newey–West HAC standard errors. Relabeled Descriptive if no comparison series qualifies.",
     assumptions: [
-      "Parallel trends between treated and control units in the absence of policy",
-      "No spillover (SUTVA) from treated units onto comparison units",
+      "Parallel pre-policy trends between treated and comparison series",
+      "No spillover (SUTVA) from treated series onto comparison series",
     ],
     threatsToValidity: [
-      "Differential shocks affecting treated vs. control units at the policy date",
-      "Under staggered adoption, TWFE can put negative weights on heterogeneous treatment effects",
+      "Differential shocks affecting treated vs. comparison series at the policy date",
+      "If no qualified comparison series is available, degrades to a single-series Descriptive regression",
     ],
   },
   synthetic_control: {
     id: "synthetic_control",
     label: "Synthetic Control (Simplex-Weighted Donor Pool & Placebo Inference)",
+    implementationStatus: "Working",
     honestyTier: "Quasi-experimental",
     honestyLabel: "Quasi-experimental (Synthetic Control)",
     minObservations: 12,
     requiresPolicyDate: true,
     requiresDonorPool: true,
+    minDonors: 2,
     requiresInstrument: false,
     requiresCutoff: false,
     plainLanguageExplanation:
-      "Constructs a convex combination of untreated donor units/series (weights >= 0, sum = 1) that minimizes pre-intervention RMSPE, then measures the post-policy gap and conducts placebo-in-space / placebo-in-time inference.",
+      "Constructs a convex combination of >= 2 untreated donor series (weights >= 0, sum = 1) that minimizes pre-intervention RMSPE, then measures the post-policy gap and conducts placebo inference. Relabeled Descriptive if fewer than 2 donor series qualify.",
     assumptions: [
-      "Treated unit's pre-policy trajectory lies within the convex hull of the donor pool",
-      "Donor units are unaffected by the policy intervention",
+      "Treated series' pre-policy trajectory lies within the convex hull of the donor pool",
+      "Donor series are unaffected by the policy intervention",
     ],
     threatsToValidity: [
       "Poor pre-intervention fit (high pre-RMSPE) invalidates post-policy gap comparisons",
-      "Interpolation bias if donor units differ markedly in scale",
+      "Interpolation bias if donor series differ markedly in scale",
     ],
   },
   rdd: {
     id: "rdd",
     label: "Local Linear Regression Discontinuity (RDD)",
+    implementationStatus: "Not yet",
     honestyTier: "Quasi-experimental",
     honestyLabel: "Quasi-experimental (Regression Discontinuity)",
     minObservations: 20,
@@ -484,7 +520,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
     requiresInstrument: false,
     requiresCutoff: true,
     plainLanguageExplanation:
-      "Estimates the discontinuous jump in the outcome at a known statutory threshold using local linear regression with triangular kernel weights.",
+      "Estimates the discontinuous jump in the outcome at a known statutory threshold using local linear regression with triangular kernel weights (requires cross-sectional running-variable microdata).",
     assumptions: [
       "Continuity of potential outcomes across the cutoff",
       "No precise manipulation/sorting of the running variable around the threshold",
@@ -497,6 +533,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   iv_2sls: {
     id: "iv_2sls",
     label: "Instrumental Variables / Two-Stage Least Squares (2SLS)",
+    implementationStatus: "Partial",
     honestyTier: "Quasi-experimental",
     honestyLabel: "Quasi-experimental (IV/2SLS)",
     minObservations: 16,
@@ -505,7 +542,7 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
     requiresInstrument: true,
     requiresCutoff: false,
     plainLanguageExplanation:
-      "Isolates exogenous variation in the endogenous policy/treatment variable using an excluded instrument, reporting the first-stage F-statistic for weak-instrument diagnostics.",
+      "Isolates exogenous variation in the endogenous policy/treatment variable using an excluded instrument series, reporting the first-stage F-statistic for weak-instrument diagnostics.",
     assumptions: [
       "Relevance: strong first-stage relationship (Stock–Yogo F > 10)",
       "Exclusion restriction: instrument affects outcome only through the endogenous treatment",
@@ -518,15 +555,17 @@ export const METHOD_CATALOG: Record<EconometricMethodId, MethodCatalogDescriptor
   panel_fe_re: {
     id: "panel_fe_re",
     label: "Panel Fixed Effects with Cluster-Robust SEs",
+    implementationStatus: "Not yet",
     honestyTier: "Associational",
     honestyLabel: "Associational",
     minObservations: 16,
     requiresPolicyDate: false,
     requiresDonorPool: true,
+    minDonors: 2,
     requiresInstrument: false,
     requiresCutoff: false,
     plainLanguageExplanation:
-      "Estimates within-unit panel regressions removing time-invariant unit heterogeneity, with cluster-robust standard errors.",
+      "Estimates within-unit panel regressions removing time-invariant unit heterogeneity, with cluster-robust standard errors (requires multi-unit panel dataset).",
     assumptions: [
       "Strict exogeneity of regressors conditional on unit fixed effects",
     ],

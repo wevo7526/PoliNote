@@ -3,6 +3,11 @@ import {
   fredProvider,
   resolveFredKey,
 } from "@/lib/data/fred";
+import {
+  beaProvider,
+  blsProvider,
+  worldBankProvider,
+} from "@/lib/data/providers";
 import { buildProviderSearchQuery, deriveObservationWindow } from "@/lib/data/selector";
 import {
   DataUnavailableError,
@@ -134,11 +139,17 @@ export async function getObservations(
     span: EvidenceSpan;
   }>
 > {
-  const seriesId =
+  const rawSeriesId =
     typeof args.seriesId === "string" ? args.seriesId.trim().toUpperCase() : "";
-  if (!seriesId) return { ok: false, error: "seriesId required" };
+  if (!rawSeriesId) return { ok: false, error: "seriesId required" };
 
-  if (!resolveFredKey()) {
+  // Route observation pulls by provider prefix (NIPA:/BEA:, BLS:, WB:/USA:, or FRED/ALFRED)
+  const isBea = /^NIPA:|^BEA:/i.test(rawSeriesId);
+  const isBls = /^BLS:/i.test(rawSeriesId);
+  const isWb = /^WB:|^[A-Z]{3}:[A-Z0-9._]+$/i.test(rawSeriesId) && !isBea && !isBls;
+  const seriesId = rawSeriesId.replace(/^(?:BEA|BLS|WB|FRED):/i, "");
+
+  if (!isBea && !isBls && !isWb && !resolveFredKey()) {
     return {
       ok: false,
       error: `Data unavailable: FRED (${seriesId}) — FRED_API_KEY is not configured`,
@@ -170,7 +181,15 @@ export async function getObservations(
     args.outputType === 4 ? (4 as const) : undefined;
 
   try {
-    const bundle = await fredProvider.observations(seriesId, {
+    const activeProvider = isBea
+      ? beaProvider
+      : isBls
+        ? blsProvider
+        : isWb
+          ? worldBankProvider
+          : fredProvider;
+
+    const bundle = await activeProvider.observations(seriesId, {
       start,
       end,
       units,
@@ -191,12 +210,13 @@ export async function getObservations(
     const earliest = seriesPoints[0]!;
     const latest = seriesPoints[seriesPoints.length - 1]!;
     const hash = bundle.snapshot.sha256.slice(0, 16);
+    const providerTag = bundle.provenance.source.toUpperCase();
 
     const span: EvidenceSpan = {
       id: spanId("econ-series", "get_observations", hash),
       server: "econ-series",
       tool: "econ.get_observations",
-      citation: `FRED ${seriesId} (${bundle.metadata.title}): ${latest.value} ${bundle.provenance.units} (${latest.date}, window ${earliest.date} to ${latest.date}, n=${seriesPoints.length}, vintage ${bundle.provenance.vintageDate ?? "latest"}, sha256=${hash})`,
+      citation: `${providerTag} ${seriesId} (${bundle.metadata.title}): ${latest.value} ${bundle.provenance.units} (${latest.date}, window ${earliest.date} to ${latest.date}, n=${seriesPoints.length}, vintage ${bundle.provenance.vintageDate ?? "latest"}, sha256=${hash})`,
       url: bundle.provenance.url,
       seriesId,
       seriesTitle: bundle.metadata.title,
@@ -226,8 +246,8 @@ export async function getObservations(
       error instanceof DataUnavailableError
         ? error.message
         : error instanceof Error
-          ? `Data unavailable: FRED (${seriesId}) — ${error.message}`
-          : `Data unavailable: FRED (${seriesId}) — observation request failed`;
+          ? `Data unavailable: (${seriesId}) — ${error.message}`
+          : `Data unavailable: (${seriesId}) — observation request failed`;
     return { ok: false, error: msg };
   }
 }

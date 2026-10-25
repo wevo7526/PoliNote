@@ -919,13 +919,26 @@ export function MethodsCatalogDrawer() {
     <div className="grid gap-2.5 border border-[var(--line)] bg-[#0e1015] p-3.5 sm:grid-cols-2 lg:grid-cols-3">
       {entries.map((m) => (
         <div key={m.id} className="border border-[var(--line)] bg-[var(--paper)] p-3">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--copper)]">
               {m.honestyLabel}
             </span>
-            <span className="font-mono text-[9.5px] text-[var(--muted)]">
-              min N={m.minObservations}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span
+                className={`px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
+                  m.implementationStatus === "Working"
+                    ? "bg-[#8fbf9a]/20 text-[#8fbf9a]"
+                    : m.implementationStatus === "Partial"
+                      ? "bg-[#d4b483]/20 text-[#d4b483]"
+                      : "bg-[#9a9284]/20 text-[var(--muted)]"
+                }`}
+              >
+                {m.implementationStatus}
+              </span>
+              <span className="font-mono text-[9.5px] text-[var(--muted)]">
+                min N={m.minObservations}
+              </span>
+            </div>
           </div>
           <h4 className="mt-1 font-[family-name:var(--font-display)] text-sm text-[var(--ink)]">
             {m.label}
