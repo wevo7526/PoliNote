@@ -1,10 +1,20 @@
+import type { FetchedSeriesBundle } from "@/lib/data/types";
+import {
+  auditGeneratedProseNumbers,
+  buildAllowedNumericRegistry,
+} from "@/lib/economics/auditor";
+import {
+  executeEconometricEstimate,
+  runAutomaticRobustnessSuite,
+} from "@/lib/economics/estimators";
+
 /**
- * PoliNote Policy Econometrics Benchmark Suite (25 Literature-Backed Policy Questions).
+ * PoliNote Policy Econometrics Benchmark Suite (20 Literature-Backed Policy Questions).
  * Used for nightly / CI evaluation of:
  * - Series selection relevance & pre/post window coverage
  * - Direction agreement & magnitude within peer-reviewed literature range
  * - Share of claims traced to empirical evidence
- * - Deterministic Data Auditor mismatch rate (target = 0)
+ * - Deterministic Data Auditor strip/mismatch rate (target = 0)
  */
 
 export type PolicyBenchmarkItem = {
@@ -267,3 +277,114 @@ export const POLICY_BENCHMARK_SUITE: readonly PolicyBenchmarkItem[] = [
     units: "% cumulative increase in housing rent index above pre-trend",
   },
 ];
+
+export type BenchmarkQuestionScore = {
+  benchmarkId: string;
+  seriesRelevant: boolean;
+  directionAgreed: boolean;
+  magnitudeInRange: boolean;
+  pointEstimate: number;
+  honestyLabel: string;
+  auditorStripRate: number;
+};
+
+export type BenchmarkSuiteSummary = {
+  totalQuestions: number;
+  seriesRelevanceRate: number;
+  directionAgreementRate: number;
+  magnitudeInRangeRate: number;
+  meanAuditorStripRate: number;
+  scores: BenchmarkQuestionScore[];
+};
+
+/**
+ * Evaluates a single benchmark item given its outcome & comparison series bundles.
+ * Scores series relevance, direction agreement, magnitude within the peer-reviewed
+ * literature range, and the Data Auditor strip rate on synthesized prose.
+ */
+export function evaluateBenchmarkQuestion(input: {
+  item: PolicyBenchmarkItem;
+  outcomeBundle: FetchedSeriesBundle;
+  comparisonBundle?: FetchedSeriesBundle;
+}): BenchmarkQuestionScore {
+  const { item, outcomeBundle, comparisonBundle } = input;
+  const hay = `${outcomeBundle.metadata.id} ${outcomeBundle.metadata.title}`.toLowerCase();
+  const seriesRelevant = item.expectedOutcomeKeywords.some((kw) =>
+    hay.includes(kw.toLowerCase()),
+  );
+
+  const estimate = executeEconometricEstimate({
+    method: comparisonBundle ? "did_twfe" : "event_study",
+    outcome: outcomeBundle,
+    donors: comparisonBundle ? [comparisonBundle] : undefined,
+    policyDate: item.policyDate,
+    scopeId: `bench_${item.id}`,
+  });
+
+  const robustness = runAutomaticRobustnessSuite({
+    headline: estimate,
+    outcome: outcomeBundle,
+    donors: comparisonBundle ? [comparisonBundle] : undefined,
+    scopeId: `bench_${item.id}`,
+  });
+
+  const [lowLit, highLit] = item.literatureEffectRange;
+  const magnitudeInRange =
+    estimate.pointEstimate >= lowLit && estimate.pointEstimate <= highLit;
+
+  const sign = Math.sign(estimate.pointEstimate);
+  const directionAgreed =
+    item.expectedDirection === "ambiguous"
+      ? magnitudeInRange
+      : item.expectedDirection === "positive"
+        ? sign > 0
+        : sign < 0;
+
+  const registry = buildAllowedNumericRegistry({
+    bundles: [outcomeBundle],
+    estimates: [estimate],
+    robustness: [robustness],
+  });
+
+  const draftText = `For ${item.id} on series ${outcomeBundle.metadata.id}, the estimated effect is ${estimate.pointEstimate} (SE = ${estimate.standardError}, 95% CI [${estimate.ciLower}, ${estimate.ciUpper}], N = ${estimate.sampleSize}).`;
+  const audit = auditGeneratedProseNumbers(draftText, registry, {
+    stripUntraced: true,
+  });
+  const auditorStripRate =
+    audit.totalNumbersChecked > 0
+      ? audit.untracedNumbers.length / audit.totalNumbersChecked
+      : 0;
+
+  return {
+    benchmarkId: item.id,
+    seriesRelevant,
+    directionAgreed,
+    magnitudeInRange,
+    pointEstimate: estimate.pointEstimate,
+    honestyLabel: estimate.honestyLabel,
+    auditorStripRate,
+  };
+}
+
+export function summarizeBenchmarkSuite(
+  scores: BenchmarkQuestionScore[],
+): BenchmarkSuiteSummary {
+  const n = Math.max(1, scores.length);
+  const seriesRelevanceRate =
+    scores.filter((s) => s.seriesRelevant).length / n;
+  const directionAgreementRate =
+    scores.filter((s) => s.directionAgreed).length / n;
+  const magnitudeInRangeRate =
+    scores.filter((s) => s.magnitudeInRange).length / n;
+  const meanAuditorStripRate =
+    scores.reduce((acc, s) => acc + s.auditorStripRate, 0) / n;
+
+  return {
+    totalQuestions: scores.length,
+    seriesRelevanceRate: +seriesRelevanceRate.toFixed(4),
+    directionAgreementRate: +directionAgreementRate.toFixed(4),
+    magnitudeInRangeRate: +magnitudeInRangeRate.toFixed(4),
+    meanAuditorStripRate: +meanAuditorStripRate.toFixed(4),
+    scores,
+  };
+}

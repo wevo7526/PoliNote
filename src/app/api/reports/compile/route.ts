@@ -8,8 +8,7 @@ import {
 import { getProject } from "@/lib/db/projects";
 import { getRun, listRuns } from "@/lib/db/runs";
 import {
-  auditGeneratedProseNumbers,
-  buildAllowedNumericRegistry,
+  auditCompiledPolicyReport,
 } from "@/lib/economics/auditor";
 import type {
   EconometricEstimate,
@@ -33,87 +32,7 @@ export const maxDuration = 120;
 const DEFAULT_MODEL = "gpt-5.6-sol";
 const FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-4.1"];
 
-export function auditCompiledPolicyReport(
-  report: CompiledPolicyReport,
-  input: {
-    fredSeries: ReturnType<typeof extractFredSeries>;
-    estimates?: EconometricEstimate[];
-    robustness?: RobustnessBundle[];
-  },
-): CompiledPolicyReport {
-  const bundles = input.fredSeries
-    .filter((s) => s.points.length > 0)
-    .map((s) => ({
-      metadata: {
-        provider: "fred" as const,
-        id: s.seriesId,
-        title: s.title,
-        units: s.units,
-        frequency: "Reported",
-        frequencyShort: "unknown" as const,
-        seasonalAdjustment: "Reported",
-        observationStart: s.points[0]!.date,
-        observationEnd: s.points[s.points.length - 1]!.date,
-        lastUpdated: s.points[s.points.length - 1]!.date,
-        discontinued: false,
-        copyrightedThirdParty: false,
-        licenseAttribution: "FRED",
-        sourceUrl: s.url || `https://fred.stlouisfed.org/series/${s.seriesId}`,
-      },
-      observations: s.points,
-      provenance: {
-        source: "fred" as const,
-        seriesId: s.seriesId,
-        title: s.title,
-        units: s.units || "Units",
-        transform: "lin",
-        seasonalAdjustment: "Reported",
-        frequency: "Reported",
-        observationWindow: {
-          start: s.points[0]!.date,
-          end: s.points[s.points.length - 1]!.date,
-        },
-        lastUpdated: s.points[s.points.length - 1]!.date,
-        retrievedAt: new Date().toISOString(),
-        url: s.url || `https://fred.stlouisfed.org/series/${s.seriesId}`,
-        licenseAttribution: "FRED",
-        copyrightedThirdParty: false,
-        payloadSha256: s.resultHash || "00000000000000000000000000000000",
-      },
-      snapshot: {
-        id: `snap_${s.seriesId}`,
-        provider: "fred" as const,
-        seriesId: s.seriesId,
-        requestUrl: s.url || "",
-        retrievedAt: new Date().toISOString(),
-        sha256: s.resultHash || "00000000000000000000000000000000",
-        byteLength: s.points.length * 16,
-        rawJson: "[]",
-      },
-    }));
-
-  const registry = buildAllowedNumericRegistry({
-    bundles,
-    estimates: input.estimates,
-    robustness: input.robustness,
-  });
-
-  const auditField = (text: string) =>
-    auditGeneratedProseNumbers(text, registry, { stripUntraced: true })
-      .sanitizedText;
-
-  return {
-    ...report,
-    executiveSummary: auditField(report.executiveSummary),
-    spineNarrative: auditField(report.spineNarrative),
-    methodologyAndTrace: auditField(report.methodologyAndTrace),
-    risksAndCounterfactuals: auditField(report.risksAndCounterfactuals),
-    keyFindings: report.keyFindings.map((kf) => ({
-      ...kf,
-      detail: auditField(kf.detail),
-    })),
-  };
-}
+export { auditCompiledPolicyReport };
 
 function buildDeterministicReport(input: {
   title: string;

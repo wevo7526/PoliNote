@@ -24,7 +24,7 @@ export function LandingHero() {
           PoliNote
         </h1>
         <p className="mt-4 max-w-md text-sm leading-relaxed text-[var(--muted)] md:text-base">
-          Ask a policy question. Projects, empirical FRED series, and a 6-role crew build the argument and report in front of you.
+          Ask a policy question. Projects, live empirical series, and a 9-role crew build the pre-registered econometric estimate, argument map, and report in front of you.
         </p>
 
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">

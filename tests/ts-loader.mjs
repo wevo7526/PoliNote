@@ -5,6 +5,13 @@ import { existsSync } from "node:fs";
 const ROOT = process.cwd();
 
 export async function resolve(specifier, context, nextResolve) {
+  if (specifier === "next/headers" || specifier === "next/server") {
+    const jsPath = path.join(ROOT, "node_modules", `${specifier}.js`);
+    if (existsSync(jsPath)) {
+      return nextResolve(pathToFileURL(jsPath).href, context);
+    }
+  }
+
   if (specifier.startsWith("@/")) {
     const rel = specifier.slice(2);
     const base = path.join(ROOT, "src", rel);

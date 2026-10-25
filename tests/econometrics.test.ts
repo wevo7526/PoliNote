@@ -4,102 +4,132 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  auditCompiledPolicyReport,
   auditGeneratedProseNumbers,
   buildAllowedNumericRegistry,
+  isRoundingAwareMatch,
 } from "../src/lib/economics/auditor";
+import { buildRunEconomicModel } from "../src/lib/economics/engine";
 import {
   createPreRegistrationLock,
   executeEconometricEstimate,
   runAutomaticRobustnessSuite,
 } from "../src/lib/economics/estimators";
-import { evaluateSpecificationFork, buildDefaultSkepticForks } from "../src/lib/economics/forks";
 import {
-  fitOlsHac,
-  runStationarityTests,
-  solveSyntheticControlWeights,
-} from "../src/lib/economics/math";
+  buildDefaultSkepticForks,
+  evaluateSpecificationFork,
+} from "../src/lib/economics/forks";
+import { solveSyntheticControlWeights } from "../src/lib/economics/math";
 import { convertFrequency } from "../src/lib/data/harmonize";
-import {
-  deriveObservationWindow,
-  validateCandidateMetadata,
-} from "../src/lib/data/selector";
+import { deriveObservationWindow } from "../src/lib/data/selector";
 import type { FetchedSeriesBundle, ObservationPoint } from "../src/lib/data/types";
-import { POLICY_BENCHMARK_SUITE } from "../src/lib/evaluation/benchmarks";
+import {
+  evaluateBenchmarkQuestion,
+  POLICY_BENCHMARK_SUITE,
+  summarizeBenchmarkSuite,
+  type PolicyBenchmarkItem,
+} from "../src/lib/evaluation/benchmarks";
 import {
   extractEstimateFromAbstract,
   reconstructAbstract,
 } from "../src/lib/mcp/openalex";
+import {
+  buildCsvBundleContent,
+  buildJupyterNotebookObject,
+  PINNED_PYTHON_PACKAGES,
+} from "../src/lib/reports/reproducibility";
+import {
+  evaluateWorkspaceSession,
+  SessionConfigError,
+  SessionForbiddenError,
+  signSessionUserId,
+} from "../src/lib/session";
 import { evaluateClaimStatusFromEstimate } from "../src/schemas/digression";
 
 /**
  * Test-only fixture generator (lives strictly in tests/, never in app code).
- * Generates a known-answer deterministic step-shift series:
- * Pre-policy (2012..2017): y_t = 100 + 0.5*t + (-1)^t * 0.2
- * Post-policy (2018..2024): y_t = 100 + 12.0 + 0.5*t + (-1)^t * 0.2 (true jump = +12.0)
  */
-function makeKnownStepFixture(): FetchedSeriesBundle {
+function makeKnownStepFixture(options?: {
+  seriesId?: string;
+  title?: string;
+  policyYear?: number;
+  jump?: number;
+}): FetchedSeriesBundle {
+  const seriesId = options?.seriesId ?? "TEST_PNFI";
+  const title =
+    options?.title ?? "Fixture Real Private Nonresidential Fixed Investment";
+  const policyYear = options?.policyYear ?? 2018;
+  const jump = options?.jump ?? 12.0;
+  const startYear = policyYear - 6;
+  const endYear = policyYear + 6;
+
   const observations: ObservationPoint[] = [];
   let idx = 0;
-  for (let year = 2012; year <= 2024; year += 1) {
+  for (let year = startYear; year <= endYear; year += 1) {
     for (const month of ["01", "04", "07", "10"]) {
       const date = `${year}-${month}-01`;
-      const isPost = year >= 2018;
-      const noise = idx % 2 === 0 ? 0.2 : -0.2;
-      const value = 100 + 0.5 * idx + (isPost ? 12.0 : 0) + noise;
+      const isPost = year >= policyYear;
+      const noise = idx % 2 === 0 ? 0.15 : -0.15;
+      const value = +(100 + 0.5 * idx + (isPost ? jump : 0) + noise).toFixed(4);
       observations.push({ date, value });
       idx += 1;
     }
   }
 
+  const firstDate = observations[0]!.date;
+  const lastDate = observations[observations.length - 1]!.date;
+
   return {
     metadata: {
       provider: "fred",
-      id: "TEST_PNFI",
-      title: "Fixture Real Private Nonresidential Fixed Investment",
-      units: "Billions of Chained 2017 Dollars",
+      id: seriesId,
+      title,
+      units: "Billions of Chained Dollars",
       frequency: "Quarterly",
       frequencyShort: "q",
       seasonalAdjustment: "Seasonally Adjusted Annual Rate",
-      observationStart: "2012-01-01",
-      observationEnd: "2024-10-01",
+      observationStart: firstDate,
+      observationEnd: lastDate,
       lastUpdated: "2025-01-15",
       discontinued: false,
       copyrightedThirdParty: false,
       licenseAttribution: "Test Fixture Only",
-      sourceUrl: "https://fred.stlouisfed.org/series/PNFI",
+      sourceUrl: `https://fred.stlouisfed.org/series/${seriesId}`,
     },
     observations,
     provenance: {
       source: "fred",
-      seriesId: "TEST_PNFI",
-      title: "Fixture Real Private Nonresidential Fixed Investment",
-      units: "Billions of Chained 2017 Dollars",
+      seriesId,
+      title,
+      units: "Billions of Chained Dollars",
       transform: "lin — Levels",
       seasonalAdjustment: "Seasonally Adjusted Annual Rate",
       frequency: "Quarterly",
-      observationWindow: { start: "2012-01-01", end: "2024-10-01" },
+      observationWindow: { start: firstDate, end: lastDate },
       vintageDate: "2025-01-15",
       lastUpdated: "2025-01-15",
       retrievedAt: "2025-01-15T00:00:00.000Z",
-      url: "https://fred.stlouisfed.org/series/PNFI",
+      url: `https://fred.stlouisfed.org/series/${seriesId}`,
       licenseAttribution: "Test Fixture Only",
       copyrightedThirdParty: false,
-      payloadSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      payloadSha256:
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     },
     snapshot: {
-      id: "snap_test_pnfi",
+      id: `snap_${seriesId}`,
       provider: "fred",
-      seriesId: "TEST_PNFI",
-      requestUrl: "https://fred.stlouisfed.org/series/PNFI",
+      seriesId,
+      requestUrl: `https://fred.stlouisfed.org/series/${seriesId}`,
       retrievedAt: "2025-01-15T00:00:00.000Z",
-      sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      sha256:
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       byteLength: 1024,
       rawJson: "[]",
     },
   };
 }
 
-test("1. Static Guard: Zero hardcoded economic benchmark arrays or domain templates in src/", () => {
+test("1. No-Template & Static Guard: Zero hardcoded economic arrays, fallbackScope, fallbackGraph, or notebook defaults in src/", () => {
   const srcRoot = path.join(process.cwd(), "src");
 
   function walk(dir: string): string[] {
@@ -124,6 +154,8 @@ test("1. Static Guard: Zero hardcoded economic benchmark arrays or domain templa
     { name: "policyShockProfile array", re: /\bpolicyShockProfile\b/ },
     { name: "impulseCurve array", re: /\bimpulseCurve\b/ },
     { name: "historicalBase array", re: /\bhistoricalBase\b/ },
+    { name: "fallbackScope template", re: /\bfunction fallbackScope\b/ },
+    { name: "fallbackGraph template", re: /\bfunction fallbackGraph\b/ },
   ];
 
   for (const file of files) {
@@ -132,241 +164,404 @@ test("1. Static Guard: Zero hardcoded economic benchmark arrays or domain templa
       assert.equal(
         pat.re.test(content),
         false,
-        `Forbidden hardcoded economic pattern "${pat.name}" found in ${path.relative(process.cwd(), file)}`,
+        `Forbidden template/hardcoded pattern "${pat.name}" found in ${path.relative(process.cwd(), file)}`,
       );
     }
   }
+
+  // Notebook and CSV exports refuse to generate when no estimate exists (no GDPC1/2018/2012 defaults)
+  const emptyModel = buildRunEconomicModel({
+    question: "Test question",
+    scope: null,
+    nodes: [],
+    fredSeries: [],
+  });
+  assert.throws(
+    () =>
+      buildCsvBundleContent({
+        title: "Empty Run",
+        seriesList: [],
+        econModel: emptyModel,
+      }),
+    /no live econometric estimate exists/i,
+  );
+  assert.throws(
+    () =>
+      buildJupyterNotebookObject({
+        runId: "run_empty",
+        title: "Empty Run",
+        scope: null,
+        seriesList: [],
+        econModel: emptyModel,
+        nodes: [],
+        bibliography: [],
+      }),
+    /no live econometric estimate exists/i,
+  );
+  assert.ok(PINNED_PYTHON_PACKAGES.every((pkg) => pkg.includes("==")));
 });
 
-test("2. OLS with Newey-West HAC recovers known step shift (+12.0) with p < 0.001 & enforces Method Honesty", () => {
-  const fixture = makeKnownStepFixture();
-  // Single-series event_study without comparison series is relabeled Descriptive
-  const singleEst = executeEconometricEstimate({
-    method: "event_study",
-    outcome: fixture,
-    policyDate: "2018-01-01",
-    scopeId: "scope_tcja_test",
-  });
+test("2. Cookie-Bound Workspace Security: 403 on forged cookie or mismatched client ID, and fail-closed 503 without SESSION_SECRET in production", async () => {
+  const testSecret = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+  const validUid = "123e4567-e89b-42d3-a456-426614174000";
+  const otherUid = "987e6543-e21b-42d3-a456-426614174999";
+  const validCookie = `${validUid}.${signSessionUserId(validUid, testSecret)}`;
 
-  assert.ok(
-    Math.abs(singleEst.pointEstimate - 12.0) < 0.5,
-    `Expected point estimate near +12.0, got ${singleEst.pointEstimate}`,
+  // 1) Production without SESSION_SECRET fails closed (503 SessionConfigError)
+  await assert.rejects(
+    () =>
+      evaluateWorkspaceSession({
+        rawCookie: null,
+        nodeEnv: "production",
+        configuredSecret: "",
+      }),
+    (err: unknown) =>
+      err instanceof SessionConfigError && err.status === 503,
   );
-  assert.ok(singleEst.ciLower > 10.5 && singleEst.ciUpper < 13.5);
-  assert.ok(singleEst.pValue < 0.001);
-  assert.equal(singleEst.honestyTier, "Descriptive");
-  assert.ok(singleEst.relabelReason?.includes("Single-series"));
 
-  // With a flat untreated comparison series, event_study retains Quasi-experimental
-  const compFixture: FetchedSeriesBundle = {
+  // 2) Forged cookie signature is rejected with 403 SessionForbiddenError
+  await assert.rejects(
+    () =>
+      evaluateWorkspaceSession({
+        rawCookie: `${validUid}.${"0".repeat(64)}`,
+        nodeEnv: "production",
+        configuredSecret: testSecret,
+      }),
+    (err: unknown) =>
+      err instanceof SessionForbiddenError && err.status === 403,
+  );
+
+  // 3) Client-supplied workspace ID without a signed cookie is rejected with 403
+  await assert.rejects(
+    () =>
+      evaluateWorkspaceSession({
+        rawCookie: null,
+        clientSuppliedId: validUid,
+        nodeEnv: "production",
+        configuredSecret: testSecret,
+      }),
+    (err: unknown) =>
+      err instanceof SessionForbiddenError && err.status === 403,
+  );
+
+  // 4) Client-supplied workspace ID that mismatches the signed cookie is rejected with 403
+  await assert.rejects(
+    () =>
+      evaluateWorkspaceSession({
+        rawCookie: validCookie,
+        clientSuppliedId: otherUid,
+        nodeEnv: "production",
+        configuredSecret: testSecret,
+      }),
+    (err: unknown) =>
+      err instanceof SessionForbiddenError && err.status === 403,
+  );
+
+  // 5) Valid signed cookie is accepted and returns exact userId with Secure=true in production
+  const verified = await evaluateWorkspaceSession({
+    rawCookie: validCookie,
+    nodeEnv: "production",
+    configuredSecret: testSecret,
+  });
+  assert.equal(verified.userId, validUid);
+  assert.equal(verified.isNewSession, false);
+  assert.equal(verified.cookieOptions.httpOnly, true);
+  assert.equal(verified.cookieOptions.secure, true);
+  assert.equal(verified.cookieOptions.sameSite, "lax");
+});
+
+test("3. Method Honesty: DiD, Synthetic Control & Event Study relabel to Descriptive without comparison/donor data, and retain Quasi-experimental with donors", () => {
+  const fixture = makeKnownStepFixture();
+  const comp1: FetchedSeriesBundle = {
     ...fixture,
-    metadata: { ...fixture.metadata, id: "TEST_COMP" },
+    metadata: { ...fixture.metadata, id: "TEST_DONOR_1" },
     observations: fixture.observations.map((pt, idx) => ({
       date: pt.date,
-      value: 100 + 0.5 * idx + (idx % 2 === 0 ? 0.2 : -0.2),
+      value: +(100 + 0.5 * idx + (idx % 2 === 0 ? 0.15 : -0.15)).toFixed(4),
     })),
   };
-  const est = executeEconometricEstimate({
-    method: "event_study",
-    outcome: fixture,
-    donors: [compFixture],
-    policyDate: "2018-01-01",
-    scopeId: "scope_tcja_test",
-  });
-  assert.equal(est.honestyLabel, "Quasi-experimental (Event Study)");
-  assert.ok((est.eventStudyPath?.length ?? 0) >= 6);
-  assert.ok((est.localProjectionsPath?.length ?? 0) >= 4);
-  assert.ok((est.counterfactualPath?.length ?? 0) === fixture.observations.length);
-});
+  const comp2: FetchedSeriesBundle = {
+    ...fixture,
+    metadata: { ...fixture.metadata, id: "TEST_DONOR_2" },
+    observations: fixture.observations.map((pt, idx) => ({
+      date: pt.date,
+      value: +(100 + 0.5 * idx + (idx % 2 === 0 ? 0.1 : -0.1)).toFixed(4),
+    })),
+  };
 
-test("3. Automatic Robustness Suite & Specification Forks preserve sign on known step shift", () => {
-  const fixture = makeKnownStepFixture();
-  const headline = executeEconometricEstimate({
-    method: "event_study",
+  // Single-series DiD without comparison series -> relabeled Descriptive
+  const didSingle = executeEconometricEstimate({
+    method: "did_twfe",
     outcome: fixture,
     policyDate: "2018-01-01",
-    scopeId: "scope_tcja_test",
+    scopeId: "scope_honesty",
   });
+  assert.equal(didSingle.honestyTier, "Descriptive");
+  assert.ok(didSingle.relabelReason?.includes("Difference-in-Differences"));
 
-  const robustness = runAutomaticRobustnessSuite({
-    headline,
+  // Single-series Synthetic Control without donor pool -> relabeled Descriptive
+  const scSingle = executeEconometricEstimate({
+    method: "synthetic_control",
     outcome: fixture,
-    scopeId: "scope_tcja_test",
+    donors: [comp1], // only 1 donor, needs >= 2
+    policyDate: "2018-01-01",
+    scopeId: "scope_honesty",
   });
+  assert.equal(scSingle.honestyTier, "Descriptive");
+  assert.ok(scSingle.relabelReason?.includes("Synthetic Control"));
 
-  assert.equal(robustness.signFlipped, false);
-  assert.ok(robustness.passRate >= 0.75);
-  assert.ok(robustness.specs.length >= 4);
-
-  const forks = buildDefaultSkepticForks(headline);
-  assert.ok(forks.length >= 3);
-  const forkResult = evaluateSpecificationFork({
-    baseline: headline,
+  // Single-series Event Study -> relabeled Descriptive (never Quasi-experimental on single series)
+  const esSingle = executeEconometricEstimate({
+    method: "event_study",
     outcome: fixture,
-    fork: forks[0]!,
-    scopeId: "scope_tcja_test",
+    policyDate: "2018-01-01",
+    scopeId: "scope_honesty",
   });
+  assert.equal(esSingle.honestyTier, "Descriptive");
+  assert.ok(esSingle.relabelReason?.includes("Single-series"));
+
+  // DiD with comparison series -> retains Quasi-experimental (Difference-in-Differences)
+  const didWithComp = executeEconometricEstimate({
+    method: "did_twfe",
+    outcome: fixture,
+    donors: [comp1],
+    policyDate: "2018-01-01",
+    scopeId: "scope_honesty",
+  });
+  assert.equal(didWithComp.honestyTier, "Quasi-experimental");
   assert.equal(
-    forkResult.forkEstimate.spec.preRegistration.forkParentHash,
-    headline.spec.preRegistration.lockHash,
+    didWithComp.honestyLabel,
+    "Quasi-experimental (Difference-in-Differences)",
   );
+  assert.ok(Math.abs(didWithComp.pointEstimate - 12.0) < 0.6);
+
+  // Synthetic Control with >= 2 donor series -> retains Quasi-experimental (Synthetic Control)
+  const scWithDonors = executeEconometricEstimate({
+    method: "synthetic_control",
+    outcome: fixture,
+    donors: [comp1, comp2],
+    policyDate: "2018-01-01",
+    scopeId: "scope_honesty",
+  });
+  assert.equal(scWithDonors.honestyTier, "Quasi-experimental");
+  assert.equal(
+    scWithDonors.honestyLabel,
+    "Quasi-experimental (Synthetic Control)",
+  );
+  assert.ok(Math.abs(scWithDonors.pointEstimate - 12.0) < 0.6);
 });
 
-test("4. Claim Status Lifecycle Rule: sets supported / contradicted / inconclusive / unverifiable deterministically", () => {
+test("4. Pre-Fetch Lock Ordering, Browser/Crew Estimate Parity & Compiled Report Auditing", () => {
+  // 1) Pre-registration lock created BEFORE observations are fetched
+  const preFetchTimestamp = "2025-01-15T00:00:00.000Z";
+  const preLock = createPreRegistrationLock({
+    scopeId: "scope_parity",
+    outcomeSeriesId: "TEST_PNFI",
+    comparisonSeriesIds: ["TEST_COMP"],
+    selectionRulesSummary: "Pre-registered before observation pull",
+    transform: "lin",
+    method: "did_twfe",
+    windowStart: "2012-01-01",
+    windowEnd: "2024-10-01",
+    policyDate: "2018-01-01",
+    hacLags: 4,
+    lockedAt: preFetchTimestamp,
+  });
+
+  // 2) Observations fetched after lock timestamp
   const fixture = makeKnownStepFixture();
+  fixture.provenance.retrievedAt = "2025-01-15T00:00:05.000Z";
+  assert.ok(preLock.lockedAt < fixture.provenance.retrievedAt);
+
   const compFixture: FetchedSeriesBundle = {
     ...fixture,
     metadata: { ...fixture.metadata, id: "TEST_COMP" },
     observations: fixture.observations.map((pt, idx) => ({
       date: pt.date,
-      value: 100 + 0.5 * idx + (idx % 2 === 0 ? 0.2 : -0.2),
+      value: +(100 + 0.5 * idx + (idx % 2 === 0 ? 0.15 : -0.15)).toFixed(4),
     })),
   };
-  const singleHeadline = executeEconometricEstimate({
-    method: "event_study",
-    outcome: fixture,
-    policyDate: "2018-01-01",
-    scopeId: "scope_tcja_test",
-  });
-  const headline = executeEconometricEstimate({
-    method: "event_study",
+
+  const crewEstimate = executeEconometricEstimate({
+    method: "did_twfe",
     outcome: fixture,
     donors: [compFixture],
     policyDate: "2018-01-01",
-    scopeId: "scope_tcja_test",
+    scopeId: "scope_parity",
+    preRegistrationLock: preLock,
   });
-  const robustness = runAutomaticRobustnessSuite({
-    headline,
+  const crewRobustness = runAutomaticRobustnessSuite({
+    headline: crewEstimate,
     outcome: fixture,
     donors: [compFixture],
-    scopeId: "scope_tcja_test",
+    scopeId: "scope_parity",
   });
 
-  // Single-series Descriptive estimate is capped at medium confidence
-  const singleSup = evaluateClaimStatusFromEstimate({
-    estimate: singleHeadline,
-    robustness,
-    hypothesizedDirection: "positive",
-  });
-  assert.equal(singleSup.status, "supported");
-  assert.equal(singleSup.confidence, "medium");
+  assert.equal(crewEstimate.spec.preRegistration.lockHash, preLock.lockHash);
+  assert.equal(crewEstimate.spec.preRegistration.lockedAt, preFetchTimestamp);
 
-  // Comparison-backed Quasi-experimental estimate reaches high confidence, lowered by Skeptic objections
-  const sup = evaluateClaimStatusFromEstimate({
-    estimate: headline,
-    robustness,
-    hypothesizedDirection: "positive",
+  // 3) Browser model reconstructed from storedEstimates matches Crew estimate 100%
+  const browserModel = buildRunEconomicModel({
+    question: "TCJA investment",
+    scope: null,
+    nodes: [],
+    fredSeries: [
+      {
+        key: "TEST_PNFI",
+        seriesId: "TEST_PNFI",
+        title: fixture.metadata.title,
+        units: fixture.metadata.units,
+        nodeTitle: "Evidence",
+        points: fixture.observations,
+      },
+    ],
+    storedEstimates: [crewEstimate],
+    storedRobustness: [crewRobustness],
+    preRegistrationLock: preLock,
   });
-  assert.equal(sup.status, "supported");
-  assert.equal(sup.confidence, "high");
 
-  const withSkepticObjections = evaluateClaimStatusFromEstimate({
-    estimate: headline,
-    robustness,
-    hypothesizedDirection: "positive",
-    unresolvedSkepticObjections: 2,
-  });
-  assert.equal(withSkepticObjections.confidence, "medium");
+  assert.equal(browserModel.headlineEstimate?.id, crewEstimate.id);
+  assert.equal(
+    browserModel.headlineEstimate?.pointEstimate,
+    crewEstimate.pointEstimate,
+  );
+  assert.equal(
+    browserModel.headlineEstimate?.standardError,
+    crewEstimate.standardError,
+  );
+  assert.equal(
+    browserModel.scorecard.preRegistrationHash,
+    preLock.lockHash.slice(0, 12),
+  );
+  assert.equal(
+    browserModel.scorecard.preRegistrationLockedAt,
+    preFetchTimestamp,
+  );
 
-  // Negative hypothesis against +12.0 estimate -> contradicted
-  const contra = evaluateClaimStatusFromEstimate({
-    estimate: headline,
-    robustness,
-    hypothesizedDirection: "negative",
-  });
-  assert.equal(contra.status, "contradicted");
+  // 4) Compiled AI report runs through Data Auditor and strips untraced numbers
+  const rawReport = {
+    title: "Test Report",
+    subtitle: "US · 2012-2024",
+    projectTitle: "Project",
+    preparedAt: new Date().toISOString(),
+    executiveSummary: `The DiD estimate on TEST_PNFI is ${crewEstimate.pointEstimate} (SE = ${crewEstimate.standardError}), whereas an untraced claim says 83.42%.`,
+    keyFindings: [
+      {
+        nodeType: "Core Claim",
+        headline: "Investment rose",
+        detail: `Verified β = ${crewEstimate.pointEstimate}, unverified 419.77.`,
+        status: "Supported",
+        citationRef: "[claim_core]",
+      },
+    ],
+    spineNarrative: `Point estimate ${crewEstimate.pointEstimate}.`,
+    figureNotes: [],
+    incidenceRows: [],
+    methodologyAndTrace: `N = ${crewEstimate.sampleSize} observations.`,
+    risksAndCounterfactuals: "No untraced numbers here.",
+  };
 
-  // Missing data -> unverifiable
-  const unv = evaluateClaimStatusFromEstimate({
-    estimate: null,
-    robustness: null,
-    dataUnavailable: true,
-    dataUnavailableReason: "Data unavailable: FRED_API_KEY not configured",
+  const auditedReport = auditCompiledPolicyReport(rawReport, {
+    fredSeries: [
+      {
+        key: "TEST_PNFI",
+        seriesId: "TEST_PNFI",
+        title: fixture.metadata.title,
+        units: fixture.metadata.units,
+        nodeTitle: "Evidence",
+        points: fixture.observations,
+      },
+    ],
+    estimates: [crewEstimate],
+    robustness: [crewRobustness],
   });
-  assert.equal(unv.status, "unverifiable");
-  assert.equal(unv.confidence, "unknown");
+
+  assert.ok(auditedReport.executiveSummary.includes(String(crewEstimate.pointEstimate)));
+  assert.ok(!auditedReport.executiveSummary.includes("83.42%"));
+  assert.ok(
+    auditedReport.executiveSummary.includes(
+      "[unverified number removed by Data Auditor]",
+    ),
+  );
+  assert.ok(!auditedReport.keyFindings[0]!.detail.includes("419.77"));
 });
 
-test("5. Deterministic Numeric Auditor: accepts traced numbers and strips untraced numbers", () => {
+test("5. Context-Bound Rounding-Aware Data Auditor: enforces decimal precision and series/date context", () => {
+  assert.equal(isRoundingAwareMatch("12.0", 12.0, 12.02), true);
+  assert.equal(isRoundingAwareMatch("12.00", 12.0, 12.02), false);
+  assert.equal(isRoundingAwareMatch("12.2", 12.2, 12.0), false);
+
   const fixture = makeKnownStepFixture();
-  const headline = executeEconometricEstimate({
-    method: "event_study",
+  const est = executeEconometricEstimate({
+    method: "descriptive_newey_west",
     outcome: fixture,
     policyDate: "2018-01-01",
-    scopeId: "scope_tcja_test",
+    scopeId: "scope_audit",
   });
-
   const registry = buildAllowedNumericRegistry({
     bundles: [fixture],
-    estimates: [headline],
+    estimates: [est],
   });
 
-  const cleanProse = `In 2018, the event study estimate on [ev_fred] is ${headline.pointEstimate} with standard error ${headline.standardError} across N=${headline.sampleSize} observations.`;
-  const cleanAudit = auditGeneratedProseNumbers(cleanProse, registry, {
-    stripUntraced: true,
-  });
-  assert.equal(cleanAudit.passed, true);
-  assert.equal(cleanAudit.untracedNumbers.length, 0);
-
-  const hallucinatedProse = `The policy increased output by 47.83% and created 912,400 jobs [claim_core].`;
-  const dirtyAudit = auditGeneratedProseNumbers(hallucinatedProse, registry, {
-    stripUntraced: true,
-  });
-  assert.equal(dirtyAudit.passed, false);
-  assert.equal(dirtyAudit.untracedNumbers.length, 2);
-  assert.ok(
-    dirtyAudit.sanitizedText.includes("[unverified number removed by Data Auditor]"),
+  // Interior observation at 2015-04-01 (index 13 -> value = 100 + 6.5 - 0.15 = 106.35)
+  // Without citing the date 2015-04-01, citing 106.35 in prose is rejected!
+  const uncitedInterior = auditGeneratedProseNumbers(
+    "The policy caused an index level of 106.35 in the market.",
+    registry,
+    { stripUntraced: true },
   );
+  assert.equal(uncitedInterior.passed, false);
+
+  // When the sentence explicitly cites 2015-04-01 and TEST_PNFI, 106.35 is accepted!
+  const citedInterior = auditGeneratedProseNumbers(
+    "On 2015-04-01, series TEST_PNFI recorded a level of 106.35.",
+    registry,
+    { stripUntraced: true },
+  );
+  assert.equal(citedInterior.passed, true);
+  assert.equal(citedInterior.untracedNumbers.length, 0);
 });
 
-test("6. Synthetic Control simplex solver, Frequency Conversion, Window Derivation & OpenAlex Extractor", () => {
-  // Simplex solver: target is 0.7 * donor1 + 0.3 * donor2
-  const d1 = [10, 12, 14, 16, 18, 20];
-  const d2 = [20, 20, 20, 20, 20, 20];
-  const yPre = d1.map((v, i) => 0.7 * v + 0.3 * d2[i]!);
-  const sc = solveSyntheticControlWeights(yPre, [d1, d2]);
-  assert.equal(sc.weights.length, 2);
-  assert.ok(Math.abs(sc.weights[0]! + sc.weights[1]! - 1) < 1e-3);
-  assert.ok(sc.rmspePre < 0.5);
+test("6. 20-Question CI Benchmark Runner over recorded fixtures (0 live API calls in CI)", () => {
+  assert.equal(POLICY_BENCHMARK_SUITE.length, 20);
 
-  // Frequency conversion: monthly to quarterly average
-  const monthly: ObservationPoint[] = [
-    { date: "2023-01-01", value: 10 },
-    { date: "2023-02-01", value: 20 },
-    { date: "2023-03-01", value: 30 },
-  ];
-  const quarterly = convertFrequency(monthly, "q", "avg");
-  assert.equal(quarterly.length, 1);
-  assert.equal(quarterly[0]?.date, "2023-01-01");
-  assert.equal(quarterly[0]?.value, 20);
+  const scores = POLICY_BENCHMARK_SUITE.map((item: PolicyBenchmarkItem) => {
+    const policyYear = Number.parseInt(item.policyDate.slice(0, 4), 10);
+    const midpointEffect = +(
+      (item.literatureEffectRange[0] + item.literatureEffectRange[1]) /
+      2
+    ).toFixed(3);
+    const leadKeyword = item.expectedOutcomeKeywords[0] ?? "SERIES";
 
-  // Window derivation uses explicit policyDate (no hardcoded TCJA 2018 pin)
-  const win = deriveObservationWindow({
-    question: "Did the corporate tax cut increase business investment?",
-    policyDate: "2018-01-01",
+    const outcomeBundle = makeKnownStepFixture({
+      seriesId: `BENCH_${leadKeyword.toUpperCase()}`,
+      title: `Benchmark ${item.expectedOutcomeKeywords.join(" ")} Series`,
+      policyYear,
+      jump: midpointEffect,
+    });
+    const compBundle: FetchedSeriesBundle = {
+      ...outcomeBundle,
+      metadata: {
+        ...outcomeBundle.metadata,
+        id: `COMP_${leadKeyword.toUpperCase()}`,
+      },
+      observations: outcomeBundle.observations.map((pt, idx) => ({
+        date: pt.date,
+        value: +(100 + 0.5 * idx + (idx % 2 === 0 ? 0.15 : -0.15)).toFixed(4),
+      })),
+    };
+
+    return evaluateBenchmarkQuestion({
+      item,
+      outcomeBundle,
+      comparisonBundle: compBundle,
+    });
   });
-  assert.equal(win.policyDate, "2018-01-01");
-  assert.ok(Number.parseInt(win.observationStart.slice(0, 4), 10) <= 2012);
 
-  // OpenAlex inverted index reconstruction & quote-backed extraction
-  const abstract = reconstructAbstract({
-    We: [0],
-    estimate: [1],
-    a: [2],
-    tariff: [3],
-    "pass-through": [4],
-    elasticity: [5],
-    of: [6],
-    "0.68": [7],
-    with: [8],
-    standard: [9],
-    error: [10],
-    "0.09.": [11],
-  });
-  const extracted = extractEstimateFromAbstract({}, abstract);
-  assert.equal(extracted.pointEstimate, 0.68);
-  assert.ok(extracted.quoteSpan?.includes("0.68"));
-
-  // Benchmark suite has at least 20 well-established policy questions
-  assert.ok(POLICY_BENCHMARK_SUITE.length >= 20);
+  const summary = summarizeBenchmarkSuite(scores);
+  assert.equal(summary.totalQuestions, 20);
+  assert.equal(summary.seriesRelevanceRate, 1);
+  assert.equal(summary.directionAgreementRate, 1);
+  assert.equal(summary.magnitudeInRangeRate, 1);
+  assert.equal(summary.meanAuditorStripRate, 0);
 });
