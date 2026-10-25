@@ -18,7 +18,6 @@ import {
   extractFredSeries,
 } from "@/components/studio/ReportCharts";
 import { buildRunEconomicModel } from "@/lib/economics/engine";
-import { USER_HEADER } from "@/lib/local-workspace";
 import {
   buildClientFallbackReport,
   downloadPdfReport,
@@ -38,7 +37,6 @@ export function ProjectDesk() {
   const searchParams = useSearchParams();
   const projectParam = searchParams.get("project");
   const {
-    userId,
     projects,
     activeProjectId,
     activeProject,
@@ -94,7 +92,7 @@ export function ProjectDesk() {
     void (async () => {
       try {
         const response = await fetch(`/api/projects/${targetId}`, {
-          headers: userId ? { [USER_HEADER]: userId } : undefined,
+          credentials: "same-origin",
         });
         if (!response.ok || cancelled) {
           if (!cancelled) setLoading(false);
@@ -116,7 +114,7 @@ export function ProjectDesk() {
     return () => {
       cancelled = true;
     };
-  }, [targetId, userId]);
+  }, [targetId]);
 
   const project =
     (data?.project.id === targetId ? data.project : null) ?? localProject;
@@ -240,9 +238,9 @@ export function ProjectDesk() {
       try {
         const res = await fetch("/api/reports/compile", {
           method: "POST",
+          credentials: "same-origin",
           headers: {
             "Content-Type": "application/json",
-            ...(userId ? { [USER_HEADER]: userId } : {}),
           },
           body: JSON.stringify({ projectId: project.id }),
         });

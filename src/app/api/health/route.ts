@@ -89,6 +89,7 @@ export async function GET(request: Request) {
     process.env.AI_GATEWAY_API_KEY?.trim() ||
     process.env.VERCEL_OIDC_TOKEN?.trim() ||
     "";
+  const pythonUrl = process.env.PYTHON_ECONOMETRICS_URL?.trim() ?? "";
 
   const probes: Record<string, ServiceHealth> = {
     db: {
@@ -102,7 +103,7 @@ export async function GET(request: Request) {
   };
 
   if (deep) {
-    const [fred, bea, bls, census, openalex, worldbank, openai] =
+    const [fred, bea, bls, census, openalex, worldbank, openai, pythonSvc] =
       await Promise.all([
         probeEndpoint(
           "fred",
@@ -169,6 +170,37 @@ export async function GET(request: Request) {
                 : undefined,
               true,
             ),
+        pythonUrl
+          ? probeEndpoint(
+              "python_econometrics",
+              true,
+              pythonUrl,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  specId: "health_probe",
+                  method: "descriptive_newey_west",
+                  outcomeSeriesId: "PROBE",
+                  outcomeTitle: "Probe",
+                  outcomeUnits: "Units",
+                  observations: Array.from({ length: 10 }, (_, i) => ({
+                    date: `2020-0${(i % 9) + 1}-01`,
+                    value: 100 + i,
+                  })),
+                }),
+              },
+              true,
+            )
+          : Promise.resolve<ServiceHealth>({
+              service: "python_econometrics",
+              configured: false,
+              reachable: false,
+              latencyMs: 0,
+              status: "unconfigured",
+              detail:
+                "PYTHON_ECONOMETRICS_URL not configured; using built-in TypeScript Newey–West HAC & Simplex engine.",
+            }),
       ]);
 
     probes.fred = fred;
@@ -178,6 +210,7 @@ export async function GET(request: Request) {
     probes.openalex = openalex;
     probes.worldbank = worldbank;
     probes.openai = openai;
+    probes.python_econometrics = pythonSvc;
   } else {
     probes.fred = {
       service: "fred",
@@ -234,6 +267,16 @@ export async function GET(request: Request) {
           ? "LLM credentials configured"
           : "OPENAI_API_KEY not set",
     };
+    probes.python_econometrics = {
+      service: "python_econometrics",
+      configured: Boolean(pythonUrl),
+      reachable: Boolean(pythonUrl),
+      latencyMs: 0,
+      status: pythonUrl ? "healthy" : "unconfigured",
+      detail: pythonUrl
+        ? "PYTHON_ECONOMETRICS_URL configured"
+        : "PYTHON_ECONOMETRICS_URL not set (built-in TS engine active)",
+    };
   }
 
   return NextResponse.json({
@@ -242,6 +285,7 @@ export async function GET(request: Request) {
     env: {
       valid: envSummary.valid,
       issues: envSummary.issues,
+      warnings: envSummary.warnings,
       configured: envSummary.configured,
     },
     services: probes,

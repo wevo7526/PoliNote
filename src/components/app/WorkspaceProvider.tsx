@@ -18,22 +18,19 @@ import {
   publicCrewError,
   type CrewStreamEvent,
 } from "@/lib/ai/crew-events";
+import type { HealthWarningItem } from "@/lib/env";
 import {
   createDefaultLocalProject,
-  getOrCreateLocalUserId,
   loadLocalWorkspace,
   mergeProjects,
   mergeRuns,
   saveLocalWorkspace,
-  setLocalUserId,
-  USER_HEADER,
 } from "@/lib/local-workspace";
 import type { ProjectSummary, RunSnapshot, RunSummary } from "@/lib/platform-types";
 import type { ScopeContract } from "@/schemas/scope-contract";
 import type { UserNodeStatus } from "@/schemas/digression";
 
 type WorkspaceContextValue = {
-  userId: string;
   projects: ProjectSummary[];
   activeProjectId: string | null;
   activeProject: ProjectSummary | null;
@@ -41,6 +38,7 @@ type WorkspaceContextValue = {
   activeId: string | null;
   snapshot: RunSnapshot | null;
   snapshotsById: Record<string, RunSnapshot>;
+  healthWarnings: HealthWarningItem[];
   creating: boolean;
   createError: string | null;
   loadingRun: boolean;
@@ -127,8 +125,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const runFromUrl = searchParams.get("run");
   const projectFromUrl = searchParams.get("project");
 
-  const [userId, setUserId] = useState<string>(() => getOrCreateLocalUserId());
-  const userIdRef = useRef<string>(userId);
   const hydratedLocalRef = useRef(false);
 
   const [projects, setProjects] = useState<ProjectSummary[]>(() => [
@@ -141,6 +137,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(runFromUrl);
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [snapshotsById, setSnapshotsById] = useState<Record<string, RunSnapshot>>({});
+  const [healthWarnings, setHealthWarnings] = useState<HealthWarningItem[]>([]);
   const [creating, setCreating] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -148,10 +145,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const snapshotRef = useRef<RunSnapshot | null>(null);
   const snapshotsByIdRef = useRef<Record<string, RunSnapshot>>({});
   const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    userIdRef.current = userId;
-  }, [userId]);
 
   useEffect(() => {
     snapshotRef.current = snapshot;
@@ -163,30 +156,53 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const apiFetch = useCallback(
     (url: string, init?: RequestInit): Promise<Response> => {
-      const headers = new Headers(init?.headers);
-      if (userIdRef.current) {
-        headers.set(USER_HEADER, userIdRef.current);
-      }
       return fetch(url, {
         ...init,
-        headers,
+        credentials: "same-origin",
       });
     },
     [],
   );
 
-  // Hydrate localized workspace from browser storage on mount, then merge with server
+  // Fetch /api/health?probe=0 to surface configuration warnings in the Workbench
   useEffect(() => {
-    const uid = getOrCreateLocalUserId();
-    userIdRef.current = uid;
-    setUserId(uid);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/health?probe=0", {
+          credentials: "same-origin",
+        });
+        if (!res.ok || cancelled) return;
+        const payload = (await res.json()) as {
+          env?: { warnings?: HealthWarningItem[] };
+        };
+        if (!cancelled && Array.isArray(payload.env?.warnings)) {
+          setHealthWarnings(payload.env.warnings);
+        }
+      } catch {
+        /* ignore health probe failure */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-    const local = loadLocalWorkspace(uid);
+  // Hydrate UI cache on mount, then sync with HttpOnly-cookie-bound server session
+  useEffect(() => {
+    const local = loadLocalWorkspace();
     setProjects(local.projects);
     setRuns(local.runs);
     setSnapshotsById(local.snapshots);
     snapshotsByIdRef.current = local.snapshots;
-    setActiveProjectId((prev) => projectFromUrl ?? local.activeProjectId ?? prev ?? local.projects[0]?.id ?? null);
+    setActiveProjectId(
+      (prev) =>
+        projectFromUrl ??
+        local.activeProjectId ??
+        prev ??
+        local.projects[0]?.id ??
+        null,
+    );
     if (runFromUrl && local.snapshots[runFromUrl]) {
       setSnapshot(local.snapshots[runFromUrl]!);
       snapshotRef.current = local.snapshots[runFromUrl]!;
@@ -198,19 +214,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const response = await apiFetch("/api/runs");
-        if (!response.ok || cancelled) return;
+        if (!response.ok || cancelled) {
+          if (response.status === 503) {
+            const err = await response.json().catch(() => null);
+            if (err && typeof err === "object" && "error" in err) {
+              setCreateError(String(err.error));
+            }
+          }
+          return;
+        }
         const data = await readJson<{
           projects?: ProjectSummary[];
           runs: RunSummary[];
-          userId?: string;
         }>(response);
         if (cancelled) return;
-
-        if (data.userId && data.userId !== userIdRef.current) {
-          userIdRef.current = data.userId;
-          setUserId(data.userId);
-          setLocalUserId(data.userId);
-        }
 
         const remoteProjects = data.projects ?? [];
         const remoteRuns = data.runs ?? [];
@@ -229,7 +246,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             null,
         );
 
-        // Background-sync any locally created projects that the server instance doesn't have yet
         for (const localProj of local.projects) {
           if (!remoteProjectIds.has(localProj.id)) {
             void apiFetch("/api/projects", {
@@ -248,16 +264,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [apiFetch, projectFromUrl, runFromUrl]);
 
-  // Persist localized workspace state to browser localStorage whenever it changes
   useEffect(() => {
-    if (!hydratedLocalRef.current || !userId) return;
-    saveLocalWorkspace(userId, {
+    if (!hydratedLocalRef.current) return;
+    saveLocalWorkspace({
       projects,
       activeProjectId,
       runs,
       snapshots: snapshotsById,
     });
-  }, [userId, projects, activeProjectId, runs, snapshotsById]);
+  }, [projects, activeProjectId, runs, snapshotsById]);
 
   const applySnapshot = useCallback((next: RunSnapshot) => {
     const normalized: RunSnapshot = { ...next, events: next.events ?? [] };
@@ -285,7 +300,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [pathname, router, searchParams],
   );
 
-  // Sync activeProjectId only when the URL ?project= parameter itself changes
   useEffect(() => {
     if (projectFromUrl) {
       setActiveProjectId(projectFromUrl);
@@ -324,7 +338,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setActiveProjectId(projectId);
       setCreateError(null);
 
-      // If the currently open run belongs to a different project, clear or switch to this project's latest run
       if (
         snapshotRef.current &&
         snapshotRef.current.run.projectId &&
@@ -364,7 +377,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         updatedAt: ts,
       };
 
-      // Immediately update localized state so project creation works with zero delay or account requirement
       abortRef.current?.abort();
       snapshotRef.current = null;
       setSnapshot(null);
@@ -599,7 +611,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       let current = snapshotRef.current;
       let targetRunId = activeId;
 
-      // Zero-friction auto-create run if none is open yet
       if (!targetRunId || !current) {
         const created = await newRun(activeProjectId ?? undefined, trimmed.slice(0, 64));
         if (!created) return;
@@ -783,7 +794,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(
     () => ({
-      userId,
       projects,
       activeProjectId: activeProject?.id ?? activeProjectId,
       activeProject,
@@ -791,6 +801,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       activeId,
       snapshot,
       snapshotsById,
+      healthWarnings,
       creating,
       createError,
       loadingRun,
@@ -807,7 +818,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       deleteRun,
     }),
     [
-      userId,
       projects,
       activeProject,
       activeProjectId,
@@ -815,6 +825,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       activeId,
       snapshot,
       snapshotsById,
+      healthWarnings,
       creating,
       createError,
       loadingRun,

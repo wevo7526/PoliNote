@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { redactSecrets } from "@/lib/mcp/http";
+import { SessionConfigError, SessionForbiddenError } from "@/lib/session";
 
 export const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -36,9 +37,16 @@ export const EnvSchema = z.object({
 
 export type ValidatedEnv = z.infer<typeof EnvSchema>;
 
+export type HealthWarningItem = {
+  key: string;
+  severity: "critical" | "warning" | "optional";
+  message: string;
+};
+
 export type EnvValidationSummary = {
   valid: boolean;
   issues: Array<{ path: string; message: string }>;
+  warnings: HealthWarningItem[];
   configured: {
     databaseUrl: boolean;
     openai: boolean;
@@ -93,9 +101,62 @@ export function validateStartupEnv(
     pythonServiceUrl: Boolean(clean.PYTHON_ECONOMETRICS_URL),
   };
 
+  if (clean.NODE_ENV === "production" && !configured.sessionSecret) {
+    issues.push({
+      path: "SESSION_SECRET",
+      message:
+        "SESSION_SECRET (>= 16 characters) is required in production (server fails closed without it).",
+    });
+  }
+
+  const warnings: HealthWarningItem[] = [];
+  if (!configured.sessionSecret) {
+    warnings.push({
+      key: "SESSION_SECRET",
+      severity: clean.NODE_ENV === "production" ? "critical" : "warning",
+      message:
+        clean.NODE_ENV === "production"
+          ? "SESSION_SECRET is missing (production fails closed without a 16+ char secret)."
+          : "SESSION_SECRET is not set in environment (using local dev secret; required in production).",
+    });
+  }
+  if (!configured.fred) {
+    warnings.push({
+      key: "FRED_API_KEY",
+      severity: "critical",
+      message:
+        "FRED_API_KEY is not set — live FRED/ALFRED series pulls will fail visibly and mark dependent claims unverifiable.",
+    });
+  }
+  if (!configured.openai) {
+    warnings.push({
+      key: "OPENAI_API_KEY",
+      severity: "critical",
+      message:
+        "No LLM credential configured (set OPENAI_API_KEY or AI_GATEWAY_API_KEY / VERCEL_OIDC_TOKEN).",
+    });
+  }
+
+  const optionalMissing: string[] = [];
+  if (!configured.bea) optionalMissing.push("BEA_API_KEY");
+  if (!configured.bls) optionalMissing.push("BLS_API_KEY");
+  if (!configured.census) optionalMissing.push("CENSUS_API_KEY");
+  if (!configured.congress) optionalMissing.push("CONGRESS_API_KEY");
+  if (!configured.databaseUrl) optionalMissing.push("DATABASE_URL");
+  if (!configured.pythonServiceUrl) optionalMissing.push("PYTHON_ECONOMETRICS_URL");
+
+  if (optionalMissing.length > 0) {
+    warnings.push({
+      key: "OPTIONAL_PROVIDERS",
+      severity: "optional",
+      message: `Optional keys/services not configured: ${optionalMissing.join(", ")}.`,
+    });
+  }
+
   cachedSummary = {
-    valid: parsed.success,
+    valid: parsed.success && issues.length === 0,
     issues,
+    warnings,
     configured,
   };
   return cachedSummary;
@@ -107,6 +168,8 @@ export function getEnvSummary(): EnvValidationSummary {
 
 export type TypedApiError = {
   code:
+    | "WORKSPACE_ACCESS_FORBIDDEN"
+    | "SESSION_SECRET_MISSING"
     | "UPSTREAM_NETWORK_ERROR"
     | "DATABASE_CONNECTION_ERROR"
     | "DATA_UNAVAILABLE"
@@ -114,6 +177,7 @@ export type TypedApiError = {
     | "NOT_FOUND"
     | "RATE_LIMITED"
     | "INTERNAL_ERROR";
+  status: number;
   service: string;
   message: string;
   retryable: boolean;
@@ -121,12 +185,33 @@ export type TypedApiError = {
 
 /**
  * Normalizes any thrown error into a structured TypedApiError.
- * Guarantees we never return a bare "fetch failed" string to the client.
+ * Guarantees we never return a bare "fetch failed" string to the client,
+ * and preserves 403/503 status codes for session security errors.
  */
 export function toTypedApiError(
   error: unknown,
   service = "platform",
 ): TypedApiError {
+  if (error instanceof SessionForbiddenError) {
+    return {
+      code: "WORKSPACE_ACCESS_FORBIDDEN",
+      status: 403,
+      service: "session",
+      message: error.message,
+      retryable: false,
+    };
+  }
+
+  if (error instanceof SessionConfigError) {
+    return {
+      code: "SESSION_SECRET_MISSING",
+      status: 503,
+      service: "session",
+      message: error.message,
+      retryable: false,
+    };
+  }
+
   const rawMessage =
     error instanceof Error ? error.message : String(error ?? "Unknown error");
   const causeMessage =
@@ -148,6 +233,7 @@ export function toTypedApiError(
         service === "database" || service === "neon"
           ? "DATABASE_CONNECTION_ERROR"
           : "UPSTREAM_NETWORK_ERROR",
+      status: 502,
       service,
       message: `Upstream ${service} request could not complete${detail}. Verify network reachability and service credentials.`,
       retryable: true,
@@ -157,6 +243,7 @@ export function toTypedApiError(
   if (/DATABASE_URL|neon|postgres|connection refused|ECONNREFUSED/i.test(combined)) {
     return {
       code: "DATABASE_CONNECTION_ERROR",
+      status: 503,
       service: "database",
       message: `Database connection error (${service}): ${combined.slice(0, 240)}`,
       retryable: true,
@@ -166,6 +253,7 @@ export function toTypedApiError(
   if (/Data unavailable:/i.test(combined)) {
     return {
       code: "DATA_UNAVAILABLE",
+      status: 503,
       service,
       message: combined.slice(0, 320),
       retryable: false,
@@ -175,6 +263,7 @@ export function toTypedApiError(
   if (/429|rate limit/i.test(combined)) {
     return {
       code: "RATE_LIMITED",
+      status: 429,
       service,
       message: `Rate limit reached for ${service}: ${combined.slice(0, 240)}`,
       retryable: true,
@@ -183,6 +272,7 @@ export function toTypedApiError(
 
   return {
     code: "INTERNAL_ERROR",
+    status: 500,
     service,
     message:
       combined.slice(0, 280) ||

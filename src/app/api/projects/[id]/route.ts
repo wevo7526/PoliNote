@@ -42,7 +42,7 @@ export async function GET(_request: Request, ctx: RouteCtx) {
     console.error("[polinote/projects] get failed", typed.code, typed.message);
     return NextResponse.json(
       { error: typed.message, errorDetail: typed },
-      { status: 500 },
+      { status: typed.status },
     );
   }
 }
@@ -70,7 +70,7 @@ export async function PUT(request: Request, ctx: RouteCtx) {
     console.error("[polinote/projects] update failed", typed.code, typed.message);
     return NextResponse.json(
       { error: typed.message, errorDetail: typed },
-      { status: 500 },
+      { status: typed.status },
     );
   }
 }
@@ -89,7 +89,7 @@ export async function DELETE(_request: Request, ctx: RouteCtx) {
     console.error("[polinote/projects] delete failed", typed.code, typed.message);
     return NextResponse.json(
       { error: typed.message, errorDetail: typed },
-      { status: 500 },
+      { status: typed.status },
     );
   }
 }

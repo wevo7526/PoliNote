@@ -2,6 +2,7 @@ import {
   streamSandboxTurn,
   type SandboxStreamEvent,
 } from "@/lib/ai/sandbox";
+import { toTypedApiError } from "@/lib/env";
 import { redactSecrets } from "@/lib/mcp/http";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getSessionUserId } from "@/lib/session";
@@ -15,8 +16,17 @@ function encodeSse(event: SandboxStreamEvent): Uint8Array {
 }
 
 export async function POST(request: Request) {
-  const userId = await getSessionUserId();
-  const rate = checkRateLimit(`sandbox:${userId}`, 30, 60_000);
+  let userId: string;
+  try {
+    userId = await getSessionUserId();
+  } catch (error) {
+    const typed = toTypedApiError(error, "session");
+    return Response.json(
+      { error: typed.message, errorDetail: typed },
+      { status: typed.status },
+    );
+  }
+  const rate = await checkRateLimit(`sandbox:${userId}`, 30, 60_000);
   if (!rate.allowed) {
     return Response.json(
       {

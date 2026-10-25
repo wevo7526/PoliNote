@@ -1,8 +1,13 @@
 import type { ExtractedSeries, BibliographyEntry } from "@/components/studio/ReportCharts";
 import type { RunEconomicModel } from "@/lib/economics/engine";
-import { CURRENT_CODE_VERSION, CURRENT_PROMPT_VERSION } from "@/lib/rate-limit";
 import type { DigressionNode } from "@/schemas/digression";
 import type { ScopeContract } from "@/schemas/scope-contract";
+
+export const CURRENT_PROMPT_VERSION = "polinote-econometrics-v2.5";
+export const CURRENT_CODE_VERSION =
+  process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
+  process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
+  "local-v2";
 
 function slugify(title: string): string {
   return (

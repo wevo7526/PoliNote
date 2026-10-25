@@ -20,7 +20,6 @@ import {
   extractFredSeries,
 } from "@/components/studio/ReportCharts";
 import { buildRunEconomicModel } from "@/lib/economics/engine";
-import { USER_HEADER } from "@/lib/local-workspace";
 import {
   buildClientFallbackReport,
   downloadPdfReport,
@@ -50,7 +49,7 @@ function buildBrief(question: string, nodeLines: string[]): string {
 }
 
 export function DraftDesk() {
-  const { userId, snapshot, activeId, activeProject, setNodeStatus } = useWorkspace();
+  const { snapshot, activeId, activeProject, setNodeStatus } = useWorkspace();
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
   const [compiled, setCompiled] = useState<CompiledPolicyReport | null>(null);
   const [compiling, setCompiling] = useState(false);
@@ -144,9 +143,9 @@ export function DraftDesk() {
     try {
       const response = await fetch("/api/reports/compile", {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
-          ...(userId ? { [USER_HEADER]: userId } : {}),
         },
         body: JSON.stringify({ runId: snapshot.run.id }),
       });
@@ -164,9 +163,9 @@ export function DraftDesk() {
     try {
       const response = await fetch("/api/reports/compile", {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
-          ...(userId ? { [USER_HEADER]: userId } : {}),
         },
         body: JSON.stringify({ runId: snapshot.run.id }),
       });

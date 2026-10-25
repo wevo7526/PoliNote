@@ -27,6 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     runs,
     activeId,
     snapshot,
+    healthWarnings,
     creating,
     createError,
     selectProject,
@@ -42,6 +43,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [dismissedWarnings, setDismissedWarnings] = useState(false);
 
   const isSandbox = pathname.startsWith("/app/sandbox");
   const isProjectPage = pathname.startsWith("/app/project");
@@ -374,6 +376,41 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="studio-main relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {!dismissedWarnings && healthWarnings.length > 0 ? (
+          <div
+            role="status"
+            aria-label="Platform configuration and health warnings"
+            className="flex flex-wrap items-center justify-between gap-2 border-b border-[#d4b483]/35 bg-[#d4b483]/10 px-4 py-2 text-xs"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--copper)]">
+                Health & Config Status (/api/health):
+              </span>
+              {healthWarnings.map((w) => (
+                <span
+                  key={w.key}
+                  className={`px-2 py-0.5 text-[11px] ${
+                    w.severity === "critical"
+                      ? "border border-[#d46a6a]/50 bg-[#d46a6a]/15 text-[#f0b6b6]"
+                      : w.severity === "warning"
+                        ? "border border-[#d4b483]/50 bg-[#d4b483]/15 text-[#f3eee4]"
+                        : "border border-[var(--line)] bg-[var(--bg)]/60 text-[var(--muted)]"
+                  }`}
+                >
+                  <strong className="font-mono">{w.key}:</strong> {w.message}
+                </span>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="node-action shrink-0"
+              onClick={() => setDismissedWarnings(true)}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
         {isRunSpace && activeId ? (
           <header className="workspace-topbar">
             <div className="flex min-w-0 items-center gap-2 text-xs">

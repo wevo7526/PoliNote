@@ -8,6 +8,7 @@ import { draftsFromCrewEvent } from "@/lib/ai/run-log";
 import type { RunEventDraft } from "@/lib/db/events";
 import { getProjectContextDigest } from "@/lib/db/projects";
 import { assertRunExists, createRun, getRun, persistTurn } from "@/lib/db/runs";
+import { toTypedApiError } from "@/lib/env";
 import { redactSecrets } from "@/lib/mcp/http";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getSessionUserId } from "@/lib/session";
@@ -40,8 +41,17 @@ async function persistSnapshot(userId: string, snapshot: RunSnapshot): Promise<v
 }
 
 export async function POST(request: Request, ctx: RouteCtx) {
-  const userId = await getSessionUserId();
-  const rate = checkRateLimit(`messages:${userId}`, 25, 60_000);
+  let userId: string;
+  try {
+    userId = await getSessionUserId();
+  } catch (error) {
+    const typed = toTypedApiError(error, "session");
+    return Response.json(
+      { error: typed.message, errorDetail: typed },
+      { status: typed.status },
+    );
+  }
+  const rate = await checkRateLimit(`messages:${userId}`, 25, 60_000);
   if (!rate.allowed) {
     return Response.json(
       {

@@ -11,13 +11,13 @@ export async function GET() {
     const userId = await getSessionUserId();
     const projects = await listProjects(userId);
     const runs = await listRuns(userId);
-    return NextResponse.json({ projects, runs, userId });
+    return NextResponse.json({ projects, runs });
   } catch (error) {
     const typed = toTypedApiError(error, "runs");
     console.error("[polinote/runs] list failed", typed.code, typed.message);
     return NextResponse.json(
       { error: typed.message, errorDetail: typed },
-      { status: 500 },
+      { status: typed.status },
     );
   }
 }
@@ -59,13 +59,13 @@ export async function POST(request: Request) {
     }
 
     const run = await createRun(userId, { id, projectId, title });
-    return NextResponse.json({ run, userId }, { status: 201 });
+    return NextResponse.json({ run }, { status: 201 });
   } catch (error) {
     const typed = toTypedApiError(error, "runs");
     console.error("[polinote/runs] create failed", typed.code, typed.message);
     return NextResponse.json(
       { error: typed.message, errorDetail: typed },
-      { status: 500 },
+      { status: typed.status },
     );
   }
 }

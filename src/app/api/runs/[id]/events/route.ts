@@ -1,6 +1,7 @@
 import { redactSecrets } from "@/lib/mcp/http";
 import { listEvents } from "@/lib/db/events";
 import { assertRunExists } from "@/lib/db/runs";
+import { toTypedApiError } from "@/lib/env";
 import { getSessionUserId } from "@/lib/session";
 
 export const runtime = "nodejs";
@@ -10,7 +11,16 @@ export const maxDuration = 60;
 type RouteCtx = { params: Promise<{ id: string }> };
 
 export async function GET(request: Request, ctx: RouteCtx) {
-  const userId = await getSessionUserId();
+  let userId: string;
+  try {
+    userId = await getSessionUserId();
+  } catch (error) {
+    const typed = toTypedApiError(error, "session");
+    return Response.json(
+      { error: typed.message, errorDetail: typed },
+      { status: typed.status },
+    );
+  }
   const { id: runId } = await ctx.params;
   if (!(await assertRunExists(userId, runId))) {
     return Response.json({ error: "Run not found" }, { status: 404 });

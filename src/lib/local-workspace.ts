@@ -1,17 +1,13 @@
 import type { ProjectSummary, RunSnapshot, RunSummary } from "@/lib/platform-types";
 
-export const USER_HEADER = "x-polinote-user";
-const LOCAL_USER_ID_KEY = "polinote:user_id";
-const LOCAL_WORKSPACE_PREFIX = "polinote:workspace:v1:";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/**
+ * Browser-local UI cache for fast rendering.
+ * Never stores or transmits a user/workspace ID as an authentication credential;
+ * workspace identity is enforced exclusively by the server's HttpOnly signed `pn_uid` cookie.
+ */
+const LOCAL_WORKSPACE_CACHE_KEY = "polinote:workspace:cache:v2";
 
 export const DEFAULT_LOCAL_PROJECT_ID = "proj_general_policy";
-
-export function isValidUuid(value: string | null | undefined): value is string {
-  return typeof value === "string" && UUID_RE.test(value.trim());
-}
 
 export function createDefaultLocalProject(): ProjectSummary {
   const ts = new Date().toISOString();
@@ -27,32 +23,6 @@ export function createDefaultLocalProject(): ProjectSummary {
   };
 }
 
-export function getOrCreateLocalUserId(): string {
-  if (typeof window === "undefined") {
-    return "00000000-0000-4000-8000-000000000000";
-  }
-  try {
-    const existing = window.localStorage.getItem(LOCAL_USER_ID_KEY)?.trim();
-    if (isValidUuid(existing)) {
-      return existing;
-    }
-    const created = crypto.randomUUID();
-    window.localStorage.setItem(LOCAL_USER_ID_KEY, created);
-    return created;
-  } catch {
-    return crypto.randomUUID();
-  }
-}
-
-export function setLocalUserId(userId: string): void {
-  if (typeof window === "undefined" || !isValidUuid(userId)) return;
-  try {
-    window.localStorage.setItem(LOCAL_USER_ID_KEY, userId.trim());
-  } catch {
-    /* ignore storage errors */
-  }
-}
-
 export type LocalWorkspaceState = {
   projects: ProjectSummary[];
   activeProjectId: string | null;
@@ -60,7 +30,7 @@ export type LocalWorkspaceState = {
   snapshots: Record<string, RunSnapshot>;
 };
 
-export function loadLocalWorkspace(userId: string): LocalWorkspaceState {
+export function loadLocalWorkspace(): LocalWorkspaceState {
   const fallbackProject = createDefaultLocalProject();
   const empty: LocalWorkspaceState = {
     projects: [fallbackProject],
@@ -68,10 +38,13 @@ export function loadLocalWorkspace(userId: string): LocalWorkspaceState {
     runs: [],
     snapshots: {},
   };
-  if (typeof window === "undefined" || !userId) return empty;
+  if (typeof window === "undefined") return empty;
 
   try {
-    const raw = window.localStorage.getItem(`${LOCAL_WORKSPACE_PREFIX}${userId}`);
+    // Purge legacy localStorage user_id key if present from older builds
+    window.localStorage.removeItem("polinote:user_id");
+
+    const raw = window.localStorage.getItem(LOCAL_WORKSPACE_CACHE_KEY);
     if (!raw) return empty;
     const parsed = JSON.parse(raw) as Partial<LocalWorkspaceState> | null;
     if (!parsed || typeof parsed !== "object") return empty;
@@ -110,14 +83,11 @@ export function loadLocalWorkspace(userId: string): LocalWorkspaceState {
   }
 }
 
-export function saveLocalWorkspace(
-  userId: string,
-  state: LocalWorkspaceState,
-): void {
-  if (typeof window === "undefined" || !userId) return;
+export function saveLocalWorkspace(state: LocalWorkspaceState): void {
+  if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(
-      `${LOCAL_WORKSPACE_PREFIX}${userId}`,
+      LOCAL_WORKSPACE_CACHE_KEY,
       JSON.stringify(state),
     );
   } catch {
